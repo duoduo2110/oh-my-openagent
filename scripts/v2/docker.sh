@@ -45,6 +45,14 @@ V1_PREFIX="${OMO_V1_PREFIX:-/opt/opencode1}"
 V1_VERSION="${OMO_V1_VERSION:-1.19.4}"
 V1_PORT="${OMO_V1_PORT:-4199}"
 V1_PLUGIN_PACKAGE="${OMO_V1_PLUGIN_PACKAGE:-oh-my-openagent}"
+# S3a agent materialization: a throwaway *project* (never /repo) so the e2e cannot leave
+# `.opencode/agent` files in the checkout, plus the ten agent names it must produce.
+S3A_CONTAINER="omo-v2-serve"
+S3A_PROJECT="/tmp/omo-v2-s3a-project"
+S3A_PROJECT_AGENTS="/tmp/omo-v2-s3a-project/.opencode/agent"
+S3A_GLOBAL_AGENTS="/root/.config/opencode/agent"
+S3A_DISABLED_AGENT="momus"
+S3A_EXPECTED_AGENTS="sisyphus hephaestus oracle librarian explore multimodal-looker metis momus atlas sisyphus-junior"
 
 compose() { docker compose -f "$COMPOSE_FILE" -p "$PROJECT" "$@"; }
 
@@ -67,6 +75,11 @@ usage() {
                 证据落 .slim/v2-evidence/s0-<ts>.json
   e2e-s1a       V1 -> V2 工具桥接（S1a）：A 组工具进入 ctx.tool.list()、grep/glob 覆盖内置、
                 zod 直传、无 schema 错误，并跑桥接自测；证据落 .slim/v2-evidence/s1a-<ts>.json
+  e2e-s2a       V1 运行时装配到 V2 宿主（S2a）：真实 serve 容器的插件日志出现
+                [omo-v2] runtime assembled hooks/tools/managers/agents 计数，且适配器自测通过；
+                证据落 .slim/v2-evidence/s2a-<ts>.json
+  e2e-s3a       内置 10 agent 物化为 V2 可发现的 markdown（S3a）：/api/agent 名称与 mode、二次 setup 全 skipped、
+                禁用后删除 md、global scope，证据落 .slim/v2-evidence/s3a-<ts>.json
   e2e-v1        V1 回归门禁：真实 OpenCode 1.x CLI 加载本仓库插件，断言 V1 装配成功且无任何 V2 提示/探针，
                 证据落 .slim/v2-evidence/e2e-v1-<ts>.log
 
@@ -155,6 +168,68 @@ wait_for_probe_agent() {
     sleep 2
   done
 }
+
+# --- S3a helpers ------------------------------------------------------------------------------
+# Start the serve container rooted at a throwaway project. `compose run -d` (rather than `up`) is
+# what makes the host location something other than /repo, so materialized agent files never land
+# in the checkout. $1 = optional `KEY=VALUE` container environment (empty for the default scope).
+s3a_start_serve() {
+  docker rm -f "$S3A_CONTAINER" >/dev/null 2>&1 || true
+  compose rm -sf serve >/dev/null 2>&1 || true
+  if [ -n "${1:-}" ]; then
+    compose run -d --service-ports --name "$S3A_CONTAINER" -w "$S3A_PROJECT" -e "$1" serve >/dev/null
+  else
+    compose run -d --service-ports --name "$S3A_CONTAINER" -w "$S3A_PROJECT" serve >/dev/null
+  fi
+}
+
+# Poll /api/plugin for the plugin id. $1 = timeout seconds.
+s3a_wait_plugin() {
+  local limit="$1" deadline tmp
+  deadline=$(( $(date +%s) + limit ))
+  tmp="$(mktemp)"
+  while :; do
+    curl -fsS --max-time 3 -u "${SERVE_USER}:${SERVE_PASSWORD}" "$SERVE_URL/api/plugin" -o "$tmp" 2>/dev/null || true
+    if [ -s "$tmp" ] && api_has_plugin "$tmp"; then
+      rm -f "$tmp"
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      rm -f "$tmp"
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+# Poll /api/agent until every comma-separated id is present. $1 = output file, $2 = timeout, $3 = ids.
+s3a_wait_agents() {
+  local out="$1" limit="$2" ids="$3" deadline
+  deadline=$(( $(date +%s) + limit ))
+  while :; do
+    fetch_agents "$out"
+    if [ -s "$out" ] && python3 - "$out" "$ids" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1])).get("data") or []
+except Exception:
+    sys.exit(1)
+present = {entry.get("id") for entry in data}
+sys.exit(0 if all(name in present for name in sys.argv[2].split(",") if name) else 1)
+PY
+    then
+      return 0
+    fi
+    [ "$(date +%s)" -ge "$deadline" ] && return 1
+    sleep 2
+  done
+}
+
+# The plugin's own log, as it stands inside the container.
+s3a_plugin_log() { # $1 = output file
+  docker exec "$S3A_CONTAINER" bash -lc "cat '${PLUGIN_LOG_FILE}' 2>/dev/null" > "$1" 2>/dev/null || true
+}
+
 
 cmd_build() {
   compose build "$@"
@@ -728,6 +803,489 @@ PY
 }
 
 
+# S2a acceptance: the V1 runtime is assembled on the V2 host.
+#
+# Two independent probes, both required:
+#   1. a real OpenCode 2 serve container, whose plugin log must carry the `[omo-v2] runtime
+#      assembled hooks=<n> ... tools=<n> ... managers=<list> agents=<n>` line with sane counts and
+#      no `runtime assembly failed`;
+#   2. the adapter selftest, which assembles a second runtime from a fake context and proves the
+#      singleton, the idempotent dispose and the loud "missing method" behaviour.
+cmd_e2e_s2a() {
+  mkdir -p "$EVIDENCE_DIR"
+  local ts api_json log_file plugin_log selftest_log result_file status=1 selftest_status=1 verdict=0
+  ts="$(date +%Y%m%d-%H%M%S)"
+  api_json="$EVIDENCE_DIR/s2a-${ts}.plugin.json"
+  log_file="$EVIDENCE_DIR/s2a-${ts}.serve.log"
+  plugin_log="$EVIDENCE_DIR/s2a-${ts}.plugin.log"
+  selftest_log="$EVIDENCE_DIR/s2a-${ts}.selftest.log"
+  result_file="$EVIDENCE_DIR/s2a-${ts}.json"
+
+  # The compose file publishes a fixed 127.0.0.1:14096; only this stage makes the host port
+  # overridable, so a second lane (or a second checkout) can run its own serve without touching
+  # docker/v2/compose.yaml. `!override` replaces the port list instead of appending to it.
+  local compose_files=(-f "$COMPOSE_FILE") port_override=""
+  if [ "${HOST_PORT}" != "14096" ]; then
+    port_override="/tmp/omo-v2-s2a-port-${HOST_PORT}.yaml"
+    cat > "$port_override" <<YAML
+services:
+  serve:
+    ports: !override
+      - "127.0.0.1:${HOST_PORT}:4096"
+YAML
+    compose_files+=(-f "$port_override")
+  fi
+
+  s2a_compose() { docker compose "${compose_files[@]}" -p "$PROJECT" "$@"; }
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "==> 镜像缺失，先构建 $IMAGE"
+    compose build
+  fi
+
+  echo "==> 构建 V2 插件产物 (dist/index.js)"
+  cmd_build_index
+
+  echo "==> 写入插件目录与 V2 配置: $PLUGIN_DIR"
+  stage_plugin | sed 's/^/    /'
+
+  echo "==> 启动 serve 容器 (宿主 127.0.0.1:${HOST_PORT} -> 4096)"
+  s2a_compose rm -sf serve >/dev/null 2>&1 || true
+  # One clean plugin log per run so a stale assembly line can never satisfy the assertions.
+  run_v2 bash -lc "rm -f '${PLUGIN_LOG_FILE}'" >/dev/null 2>&1 || true
+  s2a_compose up -d --no-build serve
+
+  local tmp deadline
+  tmp="$(mktemp)"
+  deadline=$(( $(date +%s) + 90 ))
+  while :; do
+    curl -fsS --max-time 3 -u "${SERVE_USER}:${SERVE_PASSWORD}" \
+      "$SERVE_URL/api/plugin" -o "$tmp" 2>/dev/null || true
+    if [ -s "$tmp" ] && api_has_plugin "$tmp"; then
+      status=0
+      break
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "!!! 90s 内 /api/plugin 未出现插件 ${PLUGIN_ID_EXPECTED}" >&2
+      break
+    fi
+    sleep 3
+  done
+  cp "$tmp" "$api_json" 2>/dev/null || true
+  rm -f "$tmp"
+
+  # The logger flushes on a 500ms timer; give it a beat, then snapshot the plugin log.
+  sleep 2
+  docker exec omo-v2-serve bash -lc "cat '${PLUGIN_LOG_FILE}' 2>/dev/null" > "$plugin_log" 2>/dev/null || true
+  s2a_compose logs --no-color --timestamps serve > "$log_file" 2>&1 || true
+
+  echo "==> 适配器自测（假 ctx 装配 + 单例复用 + dispose 幂等 + missing 方法必抛）"
+  set +e
+  timeout 300 docker compose -f "$COMPOSE_FILE" -p "$PROJECT" run --rm -T --no-deps v2 \
+    env TMPDIR=/tmp/s2a-selftest \
+    bash -lc 'mkdir -p /tmp/s2a-selftest && rm -f /tmp/s2a-selftest/oh-my-opencode.log && bun packages/omo-opencode/src/opencode-v2/__tests__/adapter.selftest.ts' \
+    > "$selftest_log" 2>&1
+  selftest_status=$?
+  set -e
+  tail -4 "$selftest_log" | sed 's/^/    /'
+
+  python3 - "$plugin_log" "$api_json" "$selftest_status" "$result_file" "$SERVE_URL" \
+    "$PLUGIN_ID_EXPECTED" "$selftest_log" <<'PY' || verdict=$?
+import datetime
+import json
+import re
+import sys
+
+(plugin_log_path, plugins_path, selftest_status, out_path, serve_url,
+ plugin_id, selftest_log_path) = sys.argv[1:8]
+
+ASSEMBLED = re.compile(
+    r"\[omo-v2\] runtime assembled hooks=(\d+) hookKeys=(\S*) tools=(\d+) managers=(\S*) agents=(\d+)"
+)
+REQUIRED_HOOKS = [
+    "event", "config", "chat.message", "chat.params",
+    "tool.execute.before", "tool.execute.after", "tool.definition",
+    "experimental.session.compacting",
+]
+REQUIRED_MANAGERS = ["backgroundManager", "configHandler", "skillMcpManager", "tmuxSessionManager"]
+MIN_HOOKS = 10
+MIN_TOOLS = 13
+EXPECTED_AGENTS = 11
+
+
+def load_json(path, fallback):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return fallback
+
+
+try:
+    lines = open(plugin_log_path, encoding="utf-8", errors="replace").read().splitlines()
+except Exception:
+    lines = []
+
+assembled = None
+for line in lines:
+    match = ASSEMBLED.search(line)
+    if match:
+        assembled = {
+            "hooks": int(match.group(1)),
+            "hookKeys": [key for key in match.group(2).split(",") if key],
+            "tools": int(match.group(3)),
+            "managers": [name for name in match.group(4).split(",") if name],
+            "agents": int(match.group(5)),
+            "line": line,
+        }
+
+assembly_failures = [line for line in lines if "runtime assembly failed" in line]
+reused = [line for line in lines if "[omo-v2] runtime reused" in line]
+
+hook_keys = assembled["hookKeys"] if assembled else []
+manager_names = assembled["managers"] if assembled else []
+missing_hooks = [name for name in REQUIRED_HOOKS if name not in hook_keys]
+missing_managers = [name for name in REQUIRED_MANAGERS if name not in manager_names]
+
+plugins_body = load_json(plugins_path, {"data": []})
+plugin_entry = next((entry for entry in (plugins_body.get("data") or [])
+                     if entry.get("id") == plugin_id), None)
+
+try:
+    selftest_text = open(selftest_log_path, encoding="utf-8", errors="replace").read()
+except Exception:
+    selftest_text = ""
+selftest_tail = selftest_text.splitlines()[-6:]
+selftest_match = re.search(r"S2a adapter selftest: (\d+)/(\d+) passed", selftest_text)
+selftest_passed = bool(
+    selftest_status == "0"
+    and selftest_match
+    and selftest_match.group(1) == selftest_match.group(2)
+)
+dispose_proved = "PASS dispose twice" in selftest_text
+reuse_proved = "PASS singleton reuse" in selftest_text
+missing_proved = "PASS missing method throws loudly" in selftest_text
+
+assertions = {
+    "pluginActive": plugin_entry is not None and (plugin_entry.get("state") or {}).get("status") == "active",
+    "pluginLogFound": len(lines) > 0,
+    "runtimeAssembled": assembled is not None,
+    "hookCount": bool(assembled) and assembled["hooks"] >= MIN_HOOKS,
+    "hookKeysComplete": len(missing_hooks) == 0,
+    "toolCount": bool(assembled) and assembled["tools"] >= MIN_TOOLS,
+    "managersComplete": len(missing_managers) == 0,
+    "agentCount": bool(assembled) and assembled["agents"] == EXPECTED_AGENTS,
+    "noAssemblyFailure": len(assembly_failures) == 0,
+    "noDuplicateAssembly": len(reused) == 0,
+    "selftestPassed": selftest_passed,
+    "selftestDisposeIdempotent": dispose_proved,
+    "selftestSingletonReuse": reuse_proved,
+    "selftestMissingMethodThrows": missing_proved,
+}
+
+evidence = {
+    "stage": "s2a",
+    "capturedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "serveUrl": serve_url,
+    "plugin": {"expectedId": plugin_id, "entry": plugin_entry, "active": assertions["pluginActive"]},
+    "assembly": {
+        "observed": assembled,
+        "requiredHooks": REQUIRED_HOOKS,
+        "missingHooks": missing_hooks,
+        "requiredManagers": REQUIRED_MANAGERS,
+        "missingManagers": missing_managers,
+        "failures": assembly_failures,
+    },
+    "selftest": {
+        "exit": int(selftest_status),
+        "tail": selftest_tail,
+        "artifacts": selftest_log_path,
+    },
+    "artifacts": {"pluginLog": plugin_log_path, "plugins": plugins_path},
+    "assertions": assertions,
+    "passed": all(assertions.values()),
+}
+
+json.dump(evidence, open(out_path, "w"), indent=2, ensure_ascii=False)
+print(json.dumps({"assertions": assertions,
+                  "assembly": assembled,
+                  "missingHooks": missing_hooks,
+                  "missingManagers": missing_managers}, indent=2, ensure_ascii=False))
+sys.exit(0 if evidence["passed"] else 1)
+PY
+
+  echo "==> 证据: $result_file"
+  echo "==> 插件日志: $plugin_log"
+  echo "==> 自测日志: $selftest_log"
+
+  compose rm -sf serve >/dev/null 2>&1 || true
+
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: /api/plugin 未列出 ${PLUGIN_ID_EXPECTED}" >&2
+    return 1
+  fi
+  if [ "$verdict" -ne 0 ]; then
+    echo "FAIL: S2a 断言未通过（详见 $result_file）" >&2
+    return 1
+  fi
+  echo "OK: S2a 通过（V1 运行时已装配在 V2 宿主，hooks/tools/managers/agents 计数与自测全部符合）"
+}
+
+
+# S3a: the ten built-in agents, materialized as markdown. Four host lifetimes cover the whole story:
+#   A  fresh project location → ten files written and discovered by /api/agent (name + mode)
+#   B  second `setup` on the same location → nothing rewritten (`skipped` = 10)
+#   C  `disabled_agents: [momus]` → momus' generated file deleted, momus gone from /api/agent
+#   D  `OMO_V2_AGENT_SCOPE=global` → the same ten files under ~/.config/opencode/agent
+# The project location is a throwaway directory inside the container, never /repo: a failing stage
+# must not leave `.opencode/agent` files in the checkout.
+cmd_e2e_s3a() {
+  mkdir -p "$EVIDENCE_DIR"
+  local ts work result verdict=0 ids ids_c selftest_status=1
+  ts="$(date +%Y%m%d-%H%M%S)"
+  work="$(mktemp -d)"
+  result="$EVIDENCE_DIR/s3a-${ts}.json"
+  ids="$(echo $S3A_EXPECTED_AGENTS | tr ' ' ',')"
+  ids_c="$(echo $S3A_EXPECTED_AGENTS | tr ' ' '\n' | grep -vx "$S3A_DISABLED_AGENT" | paste -sd, -)"
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "==> 镜像缺失，先构建 $IMAGE"
+    compose build
+  fi
+
+  echo "==> 构建 V2 插件产物 (dist/index.js)"
+  cmd_build_index
+
+  echo "==> 写入插件目录与 V2 配置: $PLUGIN_DIR"
+  stage_plugin | sed 's/^/    /'
+
+  echo "==> 物化自测（渲染 / 幂等 / 禁用删除 / 双 scope）"
+  set +e
+  timeout 300 docker compose -f "$COMPOSE_FILE" -p "$PROJECT" run --rm -T --no-deps v2 \
+    bun packages/omo-opencode/src/opencode-v2/__tests__/agents.selftest.ts > "$work/selftest.log" 2>&1
+  selftest_status=$?
+  set -e
+  tail -2 "$work/selftest.log" | sed 's/^/    /'
+
+  echo "==> 准备一次性项目目录 $S3A_PROJECT，并清空 agent 落盘目录"
+  run_v2 bash -lc "rm -rf '$S3A_PROJECT' '$S3A_GLOBAL_AGENTS'/*.md /root/.omo/omo.jsonc; mkdir -p '$S3A_PROJECT' '$S3A_GLOBAL_AGENTS'"
+
+  echo "==> 阶段 A：全新项目 location → 10 个 markdown agent"
+  s3a_start_serve ""
+  s3a_wait_plugin 90 || echo "!!! 90s 内 /api/plugin 未出现 ${PLUGIN_ID_EXPECTED}" >&2
+  s3a_wait_agents "$work/a.agents.json" 90 "$ids" || echo "!!! 90s 内 /api/agent 未出现全部 10 个 agent" >&2
+  fetch_agents "$work/a.agents.json"
+  curl -fsS --max-time 3 -u "${SERVE_USER}:${SERVE_PASSWORD}" "$SERVE_URL/api/plugin" -o "$work/a.plugins.json" 2>/dev/null || true
+  sleep 2
+  s3a_plugin_log "$work/a.log"
+  docker exec "$S3A_CONTAINER" bash -lc "ls '$S3A_PROJECT_AGENTS' 2>/dev/null" > "$work/a.files" 2>/dev/null || true
+  docker exec "$S3A_CONTAINER" bash -lc "cat '$S3A_PROJECT_AGENTS/oracle.md' 2>/dev/null" > "$work/oracle.md" 2>/dev/null || true
+
+  echo "==> 阶段 B：重启 serve → 第二次 setup 必须全部 skipped"
+  docker restart "$S3A_CONTAINER" >/dev/null 2>&1 || true
+  s3a_wait_plugin 90 || true
+  s3a_wait_agents "$work/b.agents.json" 90 "$ids" || true
+  sleep 2
+  s3a_plugin_log "$work/b.log"
+
+  echo "==> 阶段 C：disabled_agents=[${S3A_DISABLED_AGENT}] → 对应 markdown 必须被删除"
+  printf '%s' "{\"[opencode]\":{\"disabled_agents\":[\"${S3A_DISABLED_AGENT}\"]}}" > "$work/omo.jsonc"
+  docker exec "$S3A_CONTAINER" mkdir -p /root/.omo >/dev/null 2>&1 || true
+  docker cp "$work/omo.jsonc" "$S3A_CONTAINER:/root/.omo/omo.jsonc" >/dev/null 2>&1 || true
+  docker restart "$S3A_CONTAINER" >/dev/null 2>&1 || true
+  s3a_wait_plugin 90 || true
+  s3a_wait_agents "$work/c.agents.json" 90 "$ids_c" || true
+  fetch_agents "$work/c.agents.json"
+  sleep 2
+  s3a_plugin_log "$work/c.log"
+  docker exec "$S3A_CONTAINER" bash -lc "ls '$S3A_PROJECT_AGENTS' 2>/dev/null" > "$work/c.files" 2>/dev/null || true
+
+  echo "==> 阶段 D：OMO_V2_AGENT_SCOPE=global → 写入全局 agent 目录"
+  docker exec "$S3A_CONTAINER" bash -lc "rm -f /root/.omo/omo.jsonc; rm -rf '$S3A_PROJECT/.opencode'" >/dev/null 2>&1 || true
+  s3a_start_serve "OMO_V2_AGENT_SCOPE=global"
+  s3a_wait_plugin 90 || true
+  s3a_wait_agents "$work/d.agents.json" 90 "$ids" || true
+  fetch_agents "$work/d.agents.json"
+  sleep 2
+  s3a_plugin_log "$work/d.log"
+  docker exec "$S3A_CONTAINER" bash -lc "ls '$S3A_GLOBAL_AGENTS' 2>/dev/null" > "$work/d.files" 2>/dev/null || true
+
+  # Leave no agent markdown behind: 1.x gates assert the V2 probe file is absent, and a stale global
+  # agent would be picked up by every later serve.
+  docker rm -f "$S3A_CONTAINER" >/dev/null 2>&1 || true
+  compose rm -sf serve >/dev/null 2>&1 || true
+  run_v2 bash -lc "rm -rf '$S3A_PROJECT' '$S3A_GLOBAL_AGENTS'/*.md /root/.omo/omo.jsonc" || true
+
+  python3 - "$work" "$result" "$SERVE_URL" "$PLUGIN_ID_EXPECTED" "$S3A_EXPECTED_AGENTS" \
+    "$S3A_DISABLED_AGENT" "$S3A_PROJECT_AGENTS" "$S3A_GLOBAL_AGENTS" "$selftest_status" <<'PY' || verdict=$?
+import datetime
+import json
+import os
+import sys
+
+(work, out_path, serve_url, plugin_id, expected_names, disabled_agent,
+ project_agents_dir, global_agents_dir, selftest_status) = sys.argv[1:10]
+
+EXPECTED_MODES = {
+    "sisyphus": "primary",
+    "hephaestus": "primary",
+    "atlas": "primary",
+    "oracle": "subagent",
+    "librarian": "subagent",
+    "explore": "subagent",
+    "multimodal-looker": "subagent",
+    "metis": "subagent",
+    "momus": "subagent",
+    "sisyphus-junior": "subagent",
+}
+NAMES = [name for name in expected_names.split() if name]
+
+
+def load_json(name, fallback):
+    try:
+        return json.load(open(os.path.join(work, name)))
+    except Exception:
+        return fallback
+
+
+def read_lines(name):
+    try:
+        return [line.strip() for line in open(os.path.join(work, name)) if line.strip()]
+    except Exception:
+        return []
+
+
+def summaries(name):
+    """Every `[omo-v2-agents] summary {...}` line, oldest first."""
+    payloads = []
+    for line in read_lines(name):
+        marker = "[omo-v2-agents] summary "
+        if marker not in line:
+            continue
+        try:
+            payloads.append(json.loads(line.split(marker, 1)[1].strip()))
+        except Exception:
+            continue
+    return payloads
+
+
+def agents(name):
+    return {entry.get("id"): entry for entry in (load_json(name, {}).get("data") or [])}
+
+
+a_agents, b_agents, c_agents, d_agents = (agents(f"{phase}.agents.json") for phase in "abcd")
+a_plugins = load_json("a.plugins.json", {"data": []})
+plugin_entry = next((entry for entry in (a_plugins.get("data") or []) if entry.get("id") == plugin_id), None)
+
+a_sum, b_sum, c_sum, d_sum = (summaries(f"{phase}.log") for phase in "abcd")
+a_last = a_sum[-1] if a_sum else {}
+b_last = b_sum[-1] if b_sum else {}
+c_last = c_sum[-1] if c_sum else {}
+d_last = d_sum[-1] if d_sum else {}
+
+a_files = read_lines("a.files")
+c_files = read_lines("c.files")
+d_files = read_lines("d.files")
+md_names = lambda entries: sorted(name[:-3] for name in entries if name.endswith(".md"))
+
+modes_a = {name: a_agents.get(name, {}).get("mode") for name in NAMES}
+modes_c = {name: c_agents.get(name, {}).get("mode") for name in NAMES if name != disabled_agent}
+modes_d = {name: d_agents.get(name, {}).get("mode") for name in NAMES}
+
+oracle_frontmatter = ""
+try:
+    text = open(os.path.join(work, "oracle.md"), encoding="utf-8", errors="replace").read()
+    lines = text.split("\n")
+    end = lines.index("---", 1) if lines and lines[0] == "---" else 0
+    oracle_frontmatter = "\n".join(lines[: end + 1])
+except Exception:
+    pass
+
+try:
+    selftest_tail = open(os.path.join(work, "selftest.log"), encoding="utf-8", errors="replace").read().splitlines()[-2:]
+except Exception:
+    selftest_tail = []
+
+assertions = {
+    "pluginActive": plugin_entry is not None and (plugin_entry.get("state") or {}).get("status") == "active",
+    "selftestPassed": selftest_status == "0",
+    "projectScopeFilesWritten": set(md_names(a_files)) == set(NAMES),
+    "allTenDiscovered": all(name in a_agents for name in NAMES),
+    "modesCorrect": all(modes_a.get(name) == EXPECTED_MODES[name] for name in NAMES),
+    "noDuplicateAgents": len([name for name in NAMES if name in a_agents]) == len(NAMES),
+    "secondSetupSkippedAll": b_last.get("written") == [] and len(b_last.get("skipped") or []) == len(NAMES),
+    "secondSetupKeptAgentCount": len(b_agents) == len(a_agents),
+    "disabledFileRemoved": disabled_agent not in md_names(c_files),
+    "disabledAgentNotDiscovered": disabled_agent not in c_agents,
+    "disabledReportedRemoved": disabled_agent in (c_last.get("removed") or []),
+    "otherNineSurviveDisable": all(name in c_agents for name in NAMES if name != disabled_agent),
+    "globalScopeChosen": d_last.get("scope") == "global",
+    "globalScopeDirectory": d_last.get("directory") == global_agents_dir,
+    # the S0 probe shares the global agent directory, so only our ten names are compared
+    "globalScopeFilesWritten": set(md_names(d_files)) >= set(NAMES),
+    "globalScopeDiscovered": all(name in d_agents for name in NAMES),
+    "globalScopeModesCorrect": all(modes_d.get(name) == EXPECTED_MODES[name] for name in NAMES),
+    "frontmatterUsesSupportedKeys": oracle_frontmatter.startswith("---")
+        and "# omo-v2-agent: oracle" in oracle_frontmatter
+        and all(f"{key}:" in oracle_frontmatter for key in ("description", "mode", "permission")),
+}
+
+evidence = {
+    "stage": "s3a",
+    "capturedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "serveUrl": serve_url,
+    "plugin": {"expectedId": plugin_id, "active": assertions["pluginActive"]},
+    "discovery": {
+        "projectScopeDirectory": project_agents_dir,
+        "globalScopeDirectory": global_agents_dir,
+        "projectDiscoveredWithoutReload": assertions["allTenDiscovered"],
+        "note": "V2.1.4 picks the files up during setup; no /api/location/reload and no host restart "
+                "were needed. A project file wins over a global file with the same name.",
+    },
+    "phaseA": {
+        "summary": a_last,
+        "agents": [{"id": name, "mode": modes_a.get(name), "description": a_agents.get(name, {}).get("description")}
+                   for name in NAMES],
+        "files": md_names(a_files),
+        "oracleFrontmatter": oracle_frontmatter,
+    },
+    "phaseB": {"summary": b_last, "agentCount": len(b_agents)},
+    "phaseC": {
+        "summary": c_last,
+        "disabled": disabled_agent,
+        "files": md_names(c_files),
+        "modes": modes_c,
+    },
+    "phaseD": {"summary": d_last, "files": md_names(d_files), "modes": modes_d},
+    "frontmatterEvidence": {
+        "file": os.path.join(project_agents_dir, "oracle.md"),
+        "frontmatter": oracle_frontmatter,
+        "loaded": {key: a_agents.get("oracle", {}).get(key) for key in ("description", "mode", "hidden", "model", "request", "permissions")},
+    },
+    "selftest": {"exit": int(selftest_status), "tail": selftest_tail},
+    "assertions": assertions,
+    "passed": all(assertions.values()),
+}
+
+json.dump(evidence, open(out_path, "w"), indent=2, ensure_ascii=False)
+print(json.dumps({"assertions": assertions,
+                  "modes": modes_a,
+                  "phaseB": {"written": b_last.get("written"), "skipped": len(b_last.get("skipped") or [])},
+                  "phaseC": {"removed": c_last.get("removed"), "files": md_names(c_files)},
+                  "phaseD": {"scope": d_last.get("scope"), "files": md_names(d_files)}},
+                 indent=2, ensure_ascii=False))
+sys.exit(0 if evidence["passed"] else 1)
+PY
+
+  rm -rf "$work"
+  echo "==> 证据: $result"
+
+  if [ "$verdict" -ne 0 ]; then
+    echo "FAIL: S3a 断言未通过（详见 $result）" >&2
+    return 1
+  fi
+  echo "OK: S3a 通过（10 个 agent 物化并被 /api/agent 发现，二次 setup 全 skipped，禁用后删除 markdown，global scope 可用）"
+}
+
 # V1 regression gate. The repository ships one harness but two runtime entries; nothing may make a
 # real OpenCode 1.x host take the V2 path (no "OpenCode 2" notice, no probe file, no probe logs).
 #
@@ -906,6 +1464,8 @@ main() {
     e2e-load) cmd_e2e_load "$@" ;;
     e2e-s0) cmd_e2e_s0 "$@" ;;
     e2e-s1a) cmd_e2e_s1a "$@" ;;
+    e2e-s3a) cmd_e2e_s3a "$@" ;;
+    e2e-s2a) cmd_e2e_s2a "$@" ;;
     e2e-v1) cmd_e2e_v1 "$@" ;;
     -h|--help|help|"") usage ;;
     *)
