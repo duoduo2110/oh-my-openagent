@@ -1,0 +1,3 @@
+# .ignore
+!.slim/deepwork/
+!.slim/deepwork/**

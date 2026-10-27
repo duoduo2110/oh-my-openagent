@@ -19,7 +19,7 @@ test("the real HTTP adapter retries the same POST with its authorization and bod
     const address = server.address()
     if (!address || typeof address === "string") throw new Error("Missing TCP address")
     const waits: number[] = []
-    const response = await requestWithRetry("lazycodex-ai", `http://127.0.0.1:${address.port}/exchange`, {
+    const response = await requestWithRetry("oh-my-openagent", `http://127.0.0.1:${address.port}/exchange`, {
       method: "POST", headers: { Authorization: "Bearer fixture-token" }, body: "{}",
     }, { sleep: async (ms: number) => { waits.push(ms) }, log: () => {} })
     expect(response.status).toBe(201)
@@ -66,7 +66,7 @@ test("TLS failures, rate limits and server errors recover automatically with bou
 
 test("ambiguous 404 propagation retries rather than claiming missing configuration", async () => {
   const f = fixture([new Response("not found", { status: 404 }), new Response("{}", { status: 200 })])
-  await verifyPublisher("lazycodex-ai", "token", f.options)
+  await verifyPublisher("oh-my-openagent", "token", f.options)
   expect(f.calls).toBe(2)
 })
 
@@ -83,17 +83,17 @@ for (const status of [400, 401, 403]) {
 
 test("exhaustion surfaces actual npm status/body without misleading configuration guidance", async () => {
   const f = fixture(Array.from({ length: 6 }, () => new Response('{"error":"registry unavailable"}', { status: 503 })))
-  await expect(verifyPublisher("lazycodex-ai", "token", f.options)).rejects.toThrow("lazycodex-ai HTTP 503")
+  await expect(verifyPublisher("oh-my-openagent", "token", f.options)).rejects.toThrow("oh-my-openagent HTTP 503")
   expect(f.calls).toBe(6)
   expect(f.waits).toEqual([1000, 2000, 4000, 8000, 16000])
-  expect(f.logs[0]).toContain("lazycodex-ai HTTP 503")
+  expect(f.logs[0]).toContain("oh-my-openagent HTTP 503")
   expect(f.logs.join("\n")).toContain("registry unavailable")
   expect(f.logs.join("\n")).not.toContain("/access")
 })
 
 test("an explicit missing publisher mapping fails fast even on HTTP 404", async () => {
   const f = fixture([new Response('{"error":"No trusted publisher configured"}', { status: 404 })])
-  await expect(verifyPublisher("lazycodex-ai", "token", f.options)).rejects.toThrow("lazycodex-ai HTTP 404")
+  await expect(verifyPublisher("oh-my-openagent", "token", f.options)).rejects.toThrow("oh-my-openagent HTTP 404")
   expect(f.calls).toBe(1)
   expect(f.logs.join("\n")).toContain("/access")
 })

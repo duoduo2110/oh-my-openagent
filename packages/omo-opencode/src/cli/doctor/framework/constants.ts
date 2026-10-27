@@ -1,6 +1,5 @@
 import color from "picocolors"
 import { PUBLISHED_PACKAGE_NAME } from "../../../shared"
-import type { DoctorTarget } from "./types"
 
 export const SYMBOLS = {
   check: color.green("\u2713"),
@@ -27,7 +26,6 @@ export const CHECK_IDS = {
   MODELS: "models",
   TELEMETRY: "telemetry",
   TEAM_MODE: "team-mode",
-  CODEX: "codex",
 } as const
 
 export const CHECK_NAMES: Record<string, string> = {
@@ -38,7 +36,6 @@ export const CHECK_NAMES: Record<string, string> = {
   [CHECK_IDS.MODELS]: "Models",
   [CHECK_IDS.TELEMETRY]: "Telemetry",
   [CHECK_IDS.TEAM_MODE]: "Team Mode",
-  [CHECK_IDS.CODEX]: "Codex",
 } as const
 
 export const EXIT_CODES = {
@@ -52,19 +49,12 @@ export const PACKAGE_NAME = PUBLISHED_PACKAGE_NAME
 
 export const OPENCODE_BINARIES = ["opencode", "opencode-desktop"] as const
 
-export const EDITION_LABELS: Record<DoctorTarget, string> = {
-  opencode: "OpenCode",
-  codex: "Codex",
-}
-
-export const EDITION_PACKAGE_NAMES: Record<DoctorTarget, string> = {
+export const EDITION_PACKAGE_NAMES = {
   opencode: PUBLISHED_PACKAGE_NAME,
-  codex: "lazycodex-ai",
-}
+} as const
 
-export const UPDATE_COMMANDS: Record<DoctorTarget, string> = {
+export const UPDATE_COMMANDS = {
   opencode: `bunx ${PUBLISHED_PACKAGE_NAME} install`,
-  codex: "npx lazycodex-ai install --no-tui --codex-autonomous",
-}
+} as const
 
 export const LATEST_UNAVAILABLE_TEXT = "could not check"

@@ -2,7 +2,7 @@
 // Runs one `bun` invocation and retries it exactly once when, and only when, Bun itself crashed.
 //
 // Why: Bun 1.4.2 (and 1.4.3-canary.1) intermittently segfaults a Windows test worker while it runs
-// the rpc-host suite (packages/senpi-task/src/runners/rpc-host), tracked upstream as
+// the retired engine rpc-host suite, tracked upstream as
 // oven-sh/bun#44390 and here as #9219. The crash is in Bun's GC, not in the tests, and it keeps
 // turning the required Windows shard red on dev. CI runs that suite in its own invocation through
 // this script so a crash is contained to it and re-run once.

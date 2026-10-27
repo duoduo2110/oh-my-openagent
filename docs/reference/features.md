@@ -391,7 +391,6 @@ Commands are slash-triggered workflows that execute predefined templates.
 
 ### /ulw-loop
 
-The `/ulw-loop` slash command has been removed; continuous goal pursuit is now handled by `/goal`. The `omo-agent-toolkit ulw-loop` CLI subcommand remains as a passthrough to the Codex LazyCodex ulw-loop CLI.
 
 ### /refactor
 
@@ -507,7 +506,6 @@ Selected built-in skills include `debugging`, `dev-browser`, `frontend`, `git-ma
 
 ### Browser Automation Options
 
-On OmO Native and Codex, shipped browser guidance runs through **omowright**,
 staged inside the `browser` skill and loaded from the js-eval kernel. In Codex,
 `browser:control-in-app-browser` stays first for ordinary page control. The
 OpenCode edition keeps its `browser_automation_engine` providers; an obsolete
@@ -578,7 +576,6 @@ Same-named skill at higher priority overrides lower.
 
 Loaded skill display priority follows this order: `project > user > opencode > builtin/plugin`.
 
-Disable built-in skills via `disabled_skills: ["playwright"]` in config; the same key at the shared base of `~/.omo/omo.jsonc` hides a skill on every harness, including the bundled `frontend` / `visual-qa` skills on OmO Native.
 
 ### Category + Skill Combo Strategies
 
@@ -688,9 +685,7 @@ path is explicitly allowed.
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **look_at** | Analyze media files (PDFs, images, diagrams) via Multimodal-Looker agent. Extracts specific information or summaries from documents, describes visual content. |
 
-### Computer Use (OmO Native)
 
-**Experimental.** OmO Native agents can drive native desktop applications through the `computer` tool: screenshots, window lists, accessibility trees, and mouse and keyboard input on macOS, Linux and Windows. The engine starts only when the tool is first used; input goes to the target in the background by default, a global stop chord (Control+Option+Command+Escape on macOS, Ctrl+Alt+Shift+Escape elsewhere) suspends it, and `/computer on|off|status|stop|resume` controls it from the prompt. Inspection needs the `computer:read` permission tier and input needs `computer:exec`.
 
 Setup per OS, configuration, the safety model, privacy and troubleshooting are in the [computer use guide](../guide/computer-use.md); the tool contract is in the [computer tool reference](computer.md).
 

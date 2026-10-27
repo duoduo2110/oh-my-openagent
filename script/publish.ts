@@ -403,7 +403,7 @@ async function checkVersionExists(version: string): Promise<boolean> {
 
 async function main() {
   // The local preparation/publish entrypoint must respect the same reserved namespace.
-  if (versionOverride) resolveReleaseVersion(versionOverride, false)
+  if (versionOverride) resolveReleaseVersion(versionOverride)
   const previous = await fetchPreviousVersion()
   const newVersion = versionOverride || (bump ? bumpVersion(previous, bump) : bumpVersion(previous, "patch"))
   console.log(`New version: ${newVersion}\n`)

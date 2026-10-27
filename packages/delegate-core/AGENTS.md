@@ -25,12 +25,10 @@ Two harness-neutral primitives for the `task`/delegate tool: (1) resolve which m
 ## DEPENDENCIES & CONSUMERS
 
 - **Depends on:** `@oh-my-opencode/model-core` (`fuzzyMatchModel`, `normalizeModel`, `parseModelString`, `parseVariantFromModelID`, `transformModelForProvider`).
-- **Consumed by** (no Codex consumer): `packages/omo-opencode` (`src/tools/delegate-task/model-selection.ts` wires cache + logger deps; `hooks/delegate-task-retry/{patterns,guidance}.ts` re-export retry behavior) and `packages/senpi-task` (category resolver, category/agent fallback chains, `manager/types.ts`, `model-chain.ts` import `resolveModelForDelegateTask` + `DelegateFallbackEntry`). `packages/omo-senpi` declares the dep and uses the fallback-entry type in tests only.
 
 ## NOTES
 
 - **Cold-cache `skipped` sentinel:** when `availableModels` AND `connectedProviders` caches are both empty, resolution defers — caller waits for the model cache rather than picking wrong.
 - **`-high` models** are matched on their base model exactly, never fuzzy-downgraded to a non-high variant.
 - **Variant propagation:** a matched `DelegateFallbackEntry`'s variant flows through to the result.
-- **Fallback-chain provider shaping:** each entry's model passes through `transformModelForProvider` before exact matching, so provider-prefixed IDs (e.g. Vercel `openai/gpt-5.6-sol`) resolve on the owning entry. A rung resolves only on the providers it lists (#9146): a gateway re-publishing the model (`openrouter/anthropic/claude-opus-5.5`) or any other unlisted provider is never selected. `allowUnlistedProviders: true` opts back into cross-provider fuzzy matching for callers whose rungs are the user's own selection (the omo-senpi `model_profile` matcher); that step skips providers holding a later dedicated rung for the same model, so the earlier variant is kept.
 - Parent: [`packages/AGENTS.md`](../AGENTS.md).

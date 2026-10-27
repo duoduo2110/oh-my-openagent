@@ -9,7 +9,6 @@ const LEGACY_GPT_MODEL_RE = /gpt-5(?:\.|-)(?:2|3)(?![-\s]codex(?:\b|-|\.|_))(?:\
 const ALLOWED_LEGACY_REFERENCES = new Set([
   "packages/omo-opencode/src/generated/model-capabilities.generated.json",
   // Immutable audit data records upstream module filenames, not active model selections.
-  "script/qa/fixtures/dependency-audit/baseline-76e54b0-806f8e0/graph-artifacts/meta.json",
   // Models LazyCodex once bundled, matched only to move pre-receipt installs off them (#5245); the bundle inlines it.
   "packages/omo-codex/src/install/managed-agent-model-defaults.ts",
   "packages/omo-codex/scripts/install-dist/install-local.mjs",

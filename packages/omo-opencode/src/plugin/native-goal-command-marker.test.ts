@@ -9,7 +9,7 @@ describe("native goal command marker", () => {
   test("#given an interleaved same-session prompt #when markers are consumed #then only the native goal turn matches", () => {
     // given
     const nativeGoalParts = [{ type: "text", text: "goal command" }]
-    const unrelatedParts = [{ type: "text", text: "<omo-native-goal-command>" }]
+    const unrelatedParts = [{ type: "text", text: "<omo-goal-command>" }]
     markNativeGoalCommand(nativeGoalParts)
 
     // when
@@ -18,7 +18,7 @@ describe("native goal command marker", () => {
 
     // then
     expect(unrelatedMatched).toBeFalse()
-    expect(unrelatedParts).toEqual([{ type: "text", text: "<omo-native-goal-command>" }])
+    expect(unrelatedParts).toEqual([{ type: "text", text: "<omo-goal-command>" }])
     expect(nativeGoalMatched).toBeTrue()
     expect(nativeGoalParts).toEqual([{ type: "text", text: "goal command" }])
   })

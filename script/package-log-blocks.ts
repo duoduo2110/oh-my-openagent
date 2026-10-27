@@ -4,7 +4,7 @@
  * `changes/unreleased/<pr>.md` starts with the CHANGELOG text (the preamble, assembled at release)
  * and may carry one block per log it would have prepended to (`changes.md` or a package's):
  *
- *   <!-- changes-log: packages/omo-senpi/changes.md -->
+ *   <!-- changes-log: packages/<name>/changes.md -->
  *   ## 2026-10-20 - Title (#123)
  *   ...
  *

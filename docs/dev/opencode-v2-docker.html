@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCode V2 纯 Docker 构建/测试基座</title>
+<style>
+:root { color-scheme: light dark; }
+body {
+  margin: 0 auto; padding: 2rem 1.25rem 4rem; max-width: 52rem;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", sans-serif;
+  line-height: 1.65; color: #1f2328; background: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  code { background: #161b22; }
+  pre { background: #161b22 !important; border-color: #30363d !important; }
+  th { background: #161b22; }
+  td, th { border-color: #30363d !important; }
+  a { color: #6cb6ff; }
+}
+h1, h2, h3 { line-height: 1.25; margin: 2rem 0 0.75rem; }
+h1 { font-size: 1.75rem; border-bottom: 1px solid #d0d7de; padding-bottom: 0.4rem; }
+h2 { font-size: 1.3rem; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em;
+  background: #f3f4f6; padding: 0.1em 0.35em; border-radius: 4px; }
+pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px; padding: 0.9rem 1rem;
+  overflow-x: auto; }
+pre code { background: none; padding: 0; font-size: 0.85rem; }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; display: block; overflow-x: auto; }
+th, td { border: 1px solid #d0d7de; padding: 0.45rem 0.7rem; text-align: left; vertical-align: top; }
+th { background: #f6f8fa; }
+ul, ol { padding-left: 1.4rem; }
+a { color: #0969da; }
+</style>
+</head>
+<body>
+<h1>OpenCode V2 纯 Docker 构建/测试基座</h1>
+<p>本目录是 OMO（oh-my-openagent）移植到 OpenCode V2 的验证基座：<strong>宿主机只跑 docker / git / curl</strong>，</p>
+<p>依赖、构建、测试全部在容器里完成，<code>node_modules</code> 落在 docker 命名卷，不进宿主仓库。</p>
+<h2>文件</h2>
+<table><thead><tr>
+<th>路径</th>
+<th>作用</th>
+</tr></thead><tbody>
+<tr><td><code>docker/v2/Dockerfile</code></td><td>基础镜像：<code>oven/bun:1.4.4</code> + <code>@opencode/cli@2.1.4</code>（bin 同时提供 <code>opencode</code> / <code>opencode2</code>）+ curl/jq/git/nodejs/npm/编译工具链，build 阶段校验版本</td></tr>
+<tr><td><code>docker/v2/compose.yaml</code></td><td><code>v2</code>（常驻工具容器）与 <code>serve</code>（<code>opencode2 serve</code>，宿主 14096 → 容器 4096）</td></tr>
+<tr><td><code>scripts/v2/docker.sh</code></td><td>唯一入口：<code>build</code> / <code>install</code> / <code>typecheck</code> / <code>test</code> / <code>build-index</code> / <code>build-plugin</code> / <code>e2e-load</code></td></tr>
+</tbody></table>
+<h2>快速开始</h2>
+<pre><code>scripts/v2/docker.sh build          # 构建镜像（约 5-8 分钟，取决于网络）
+scripts/v2/docker.sh install        # 容器内 bun install --frozen-lockfile --ignore-scripts
+scripts/v2/docker.sh typecheck      # 容器内 bun run typecheck
+scripts/v2/docker.sh test packages/utils/src/jsonc-parser.test.ts
+scripts/v2/docker.sh build-index    # 只产出 V2 插件 bundle dist/index.js（秒级）
+scripts/v2/docker.sh e2e-load       # 起 serve 并断言 V2 已加载插件</code></pre>
+<p>所有子命令都透传额外参数，例如：</p>
+<pre><code>BUN_REGISTRY=https://registry.npmmirror.com scripts/v2/docker.sh install
+scripts/v2/docker.sh test packages/model-core --bail</code></pre>
+<h2>卷与挂载</h2>
+<p><code>/repo</code> 是宿主仓库的绑定挂载，其余全部是命名卷，宿主目录不会被写入依赖：</p>
+<ul><li><code>omo-v2-node-modules</code> → <code>/repo/node_modules</code></li><li><code>omo-v2-opencode-config</code> → <code>/root/.config/opencode</code>（V2 配置与暂存的插件目录）</li><li><code>omo-v2-opencode-data</code> → <code>/root/.local/share/opencode</code>（会话库、日志）</li><li><code>omo-v2-cache</code> → <code>/root/.cache</code>（bun 缓存）</li><li><code>omo-v2-lsp-daemon-node-modules</code> / <code>omo-v2-lsp-daemon-dist</code> → <code>packages/lsp-daemon/{node_modules,dist}</code></li></ul>
+<p>  （<code>test-setup.ts</code> 会用 <code>npm ci</code> 构建 vendored lsp-daemon，这两层把它挡在宿主之外）</p>
+<h2>serve 与认证</h2>
+<p><code>serve</code> 用固定密码启动，仅监听宿主 <code>127.0.0.1:14096</code>：</p>
+<pre><code>docker compose -f docker/v2/compose.yaml up -d serve
+curl -u opencode:omov2-local http://127.0.0.1:14096/api/plugin | jq &#x27;.data[].id&#x27;
+docker compose -f docker/v2/compose.yaml logs -f serve</code></pre>
+<p>认证是 HTTP Basic，用户名固定 <code>opencode</code>，密码取 <code>OPENCODE_PASSWORD</code>（默认 <code>omov2-local</code>，</p>
+<p>可用 <code>OMO_V2_SERVER_PASSWORD</code> 覆盖）。</p>
+<h2>插件是怎么接进 V2 的</h2>
+<ol><li>上游 <code>package.json</code> 的 <code>exports[&quot;./server&quot;]</code> 指向 <code>dist/index.js</code>，其默认导出带 OpenCode 2 的 <code>setup</code>。</li><li><code>build-index</code> 用与根 <code>bun run build</code> 相同的 <code>index</code> 节点打包，但<strong>不加 <code>--external zod</code></strong>，</li></ol>
+<p>   得到自包含 bundle —— 目录插件没有自己的 <code>node_modules</code>，外部依赖会导致</p>
+<p>   <code>Cannot find package &#x27;zod&#x27;</code> 加载失败。</p>
+<ol><li><code>e2e-load</code> 把 bundle 复制到配置卷里的插件目录</li></ol>
+<p>   <code>/root/.config/opencode/omo-v2-plugin/</code>，并软链 <code>skills -&gt; /repo/packages/shared-skills/skills</code></p>
+<p>   （bundle 会按自身目录读取 <code>skills/**/SKILL.md</code>），然后写 <code>opencode.json</code>：</p>
+<pre><code>{
+  &quot;$schema&quot;: &quot;https://opencode.ai/config.json&quot;,
+  &quot;plugins&quot;: [{ &quot;package&quot;: &quot;/root/.config/opencode/omo-v2-plugin&quot; }]
+}</code></pre>
+<ol><li>断言两件事：<code>GET /api/plugin</code> 的 <code>data[]</code> 出现 <code>id = oh-my-openagent</code> 且 <code>state.status = active</code>；</li></ol>
+<p>   插件日志 <code>/tmp/oh-my-opencode.log</code> 出现 <code>[opencode-v2] loaded without the V1 runtime</code> 提示</p>
+<p>   （当前基线只弹提示，agents/tools/hooks 不生效，属预期）。</p>
+<p>证据写到 <code>.slim/v2-evidence/</code>：<code>e2e-load-&lt;ts&gt;.json</code>（含响应与插件条目）、<code>.serve.log</code>（容器日志）、</p>
+<p><code>.plugin.log</code>（插件启动日志）。</p>
+<h2>已知限制</h2>
+<ul><li><code>install</code> 用 <code>--ignore-scripts</code>：根 <code>prepare</code> 会触发完整 <code>bun run build</code>，其中 materialize 步骤需要</li></ul>
+<p>  git submodule（浅克隆里为空）。构建请显式用 <code>build-index</code> / <code>build-plugin</code>。</p>
+<ul><li><code>build-plugin</code>（根 <code>bun run build</code>）会跑 codex/senpi/lsp 子构建里的 <code>npm ci</code>，可能把 <code>node_modules</code></li></ul>
+<p>  和 <code>dist</code> 写进绑定挂载的宿主仓库；只做插件加载验证时用 <code>build-index</code>。</p>
+<ul><li>容器以 root 运行，绑定挂载里生成的产物（<code>dist/</code>）宿主侧属主是 root，必要时 <code>sudo chown -R $USER dist</code>。</li><li><code>registry.npmjs.org</code> 在本机较慢且偶发失败，可用 <code>BUN_REGISTRY=https://registry.npmmirror.com</code>。</li><li>镜像包含完整编译工具链 + 全局 CLI，体积偏大（约 2.8 GB），换取原生依赖与 e2e 一次成型。</li><li>bun 的 workspace 链接会在 <code>packages/*/node_modules</code> 下留极小的符号链接桩（合计约 0.5 MB，</li></ul>
+<p>  已在 <code>.gitignore</code> 内）；1.3 GB 真实依赖只在命名卷里。</p>
+<ul><li><code>test</code> 目前<strong>跑不起来</strong>（不是镜像问题）：全局 preload <code>test-setup.ts</code> 要求存在</li></ul>
+<p>  <code>packages/lsp-daemon/dist</code>，缺失时会执行 <code>npm ci &amp;&amp; npm run build</code>，而</p>
+<p>  <code>packages/lsp-daemon/package-lock.json</code> 里有 <code>workspace:*</code> 依赖，npm 直接</p>
+<p>  <code>EUNSUPPORTEDPROTOCOL</code>，bun 在子目录里也无法解析该 workspace 协议。</p>
+<p>  需要先在有 workspace 上下文的根目录预构建出 <code>packages/lsp-daemon/dist</code>，<code>test</code> 才会进入用例。</p>
+</body>
+</html>

@@ -13,14 +13,10 @@ describe("dream persona asset", () => {
 
     // when
     const loaded = loadDreamPersona().markdown
-    const packaged = readFileSync(
-      join(here, "..", "..", "..", "..", "omo-senpi", "plugin", "extensions", "dream-persona.md"),
-      "utf8",
-    )
+
 
     // then
     expect(loaded).toBe(source)
-    expect(packaged).toBe(source)
   })
 
   it("#given the dream persona #when parsed as sections #then the machine budget-contract anchor is embedded", () => {
@@ -44,14 +40,10 @@ describe("reflection persona asset", () => {
 
     // when
     const loaded = loadReflectionPersona().markdown
-    const packaged = readFileSync(
-      join(here, "..", "..", "..", "..", "omo-senpi", "plugin", "extensions", "reflection-persona.md"),
-      "utf8",
-    )
+
 
     // then
     expect(loaded).toBe(source)
-    expect(packaged).toBe(source)
   })
 
   it("#given the reflection persona asset #when trailer keys are parsed #then the runtime keys are present", () => {

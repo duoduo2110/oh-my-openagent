@@ -21,7 +21,6 @@ export function isTestOrGeneratedPath(path) {
     || /(?:^|[\/.-])(?:fixtures?|test-harness|test-utils|test-support|test-helpers?|test-fixtures?|test-runtime)\.[cm]?[jt]sx?$/.test(path)
     || (path.includes("/testing/") && path !== "packages/omo-opencode/src/testing/create-plugin-module.ts")
     || /(?:^|\/)(?:AGENTS|README|CHANGELOG|changes|THIRD-PARTY-NOTICES)\.md$/i.test(path)
-    || /^packages\/omo-senpi\/plugin\/extensions\//.test(path)
     || /(?:^|\/)[^/]+\.generated\.[^/]+$/.test(path)
 }
 

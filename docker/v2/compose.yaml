@@ -1,0 +1,83 @@
+name: omo-v2
+
+# Docker-only build/test base for the OpenCode V2 port.
+#
+#   docker compose -f docker/v2/compose.yaml run --rm -T v2 bash
+#   docker compose -f docker/v2/compose.yaml up -d serve
+#
+# The repo is bind-mounted at /repo, but every dependency tree lands in a named
+# volume (/repo/node_modules) so `bun install` never writes to the host checkout.
+
+x-common: &common
+  # Both services share one image. The build lives on `v2` only: two services
+  # building the same tag at once makes compose's exporter race
+  # ("image ... already exists"). Use `scripts/v2/docker.sh build` first.
+  image: omo-v2-base:local
+  working_dir: /repo
+  # root keeps the well-known $HOME config paths stable inside the container;
+  # host ~/.config/opencode is never touched because it is a named volume here.
+  user: "0:0"
+  init: true
+  environment:
+    HOME: /root
+    CI: "1"
+    BUN_INSTALL_CACHE_DIR: /root/.cache/bun
+    DO_NOT_TRACK: "1"
+    # registry.npmjs.org can be slow/flaky from some networks; override with
+    # BUN_REGISTRY=https://registry.npmmirror.com scripts/v2/docker.sh install
+    BUN_CONFIG_REGISTRY: ${BUN_REGISTRY:-https://registry.npmjs.org}
+    # Fixed local-only serve password so the host-side e2e probe can authenticate.
+    # Never reuse elsewhere; the port is bound to 127.0.0.1 only.
+    OPENCODE_PASSWORD: ${OMO_V2_SERVER_PASSWORD:-omov2-local}
+  volumes:
+    - ../../:/repo
+    - node-modules:/repo/node_modules
+    - opencode-data:/root/.local/share/opencode
+    - opencode-config:/root/.config/opencode
+    - opencode-cache:/root/.cache
+    # test-setup builds the vendored lsp-daemon with `npm ci`; keep its dependency
+    # tree out of the host checkout. Its `dist` stays on the bind mount because the
+    # build script replaces that directory by rename, which fails on a mount point.
+    - lsp-daemon-node-modules:/repo/packages/lsp-daemon/node_modules
+
+services:
+  # Long-lived scratch container for install / typecheck / test / build.
+  v2:
+    <<: *common
+    container_name: omo-v2-work
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        OPENCODE_CLI_VERSION: "2.1.4"
+        BUN_REGISTRY: ${BUN_REGISTRY:-https://registry.npmjs.org}
+    command: ["sleep", "infinity"]
+
+  # e2e target: OpenCode V2 server with the local plugin loaded.
+  serve:
+    <<: *common
+    container_name: omo-v2-serve
+    command:
+      - bash
+      - -lc
+      - exec opencode2 serve --hostname 0.0.0.0 --port 4096
+    ports:
+      - "127.0.0.1:14096:4096"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4096/api/plugin >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  node-modules:
+    name: omo-v2-node-modules
+  opencode-data:
+    name: omo-v2-opencode-data
+  opencode-config:
+    name: omo-v2-opencode-config
+  opencode-cache:
+    name: omo-v2-cache
+  lsp-daemon-node-modules:
+    name: omo-v2-lsp-daemon-node-modules

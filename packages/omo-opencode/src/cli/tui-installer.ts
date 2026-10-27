@@ -11,17 +11,7 @@ import {
 } from "./config-manager"
 import { detectedToInitialValues, formatConfigSummary, SYMBOLS } from "./install-validators"
 import { getUnsupportedOpenCodeVersionMessage } from "./minimum-opencode-version"
-import { promptInstallConfig, promptInstallPlatform } from "./tui-install-prompts"
-import { detectCodexInstallation, formatCodexInstallationWarning, runCodexInstaller } from "./install-codex"
-import { runNativeDevInstaller } from "./install-native-dev"
-import {
-  nativeInstallFailureLines,
-  nativeInstallSuccessLine,
-  nativeSetupFollowUpLine,
-  offerNativeSetup,
-  runNativeInstall,
-} from "./install-native"
-import { NATIVE_EDITION_HINT_TITLE, nativeEditionHintLines, shouldShowNativeEditionHint } from "./native-edition-hint"
+import { promptInstallConfig } from "./tui-install-prompts"
 import { starGitHubRepositories } from "./star-request"
 import { getNoModelProvidersWarning, hasAnyConfiguredProvider } from "./provider-availability"
 import { ensureTuiPluginEntry } from "./config-manager/add-tui-plugin-to-tui-config"
@@ -34,31 +24,9 @@ export async function runTuiInstaller(args: InstallArgs, version: string): Promi
     return 1
   }
 
-  const selectedPlatform = await promptInstallPlatform(args.platform ?? "opencode")
-  if (!selectedPlatform) return 1
-
-  const hasOpenCode = selectedPlatform === "opencode" || selectedPlatform === "both"
-  const detected = hasOpenCode
-    ? detectCurrentConfig()
-    : {
-        isInstalled: false,
-        installedVersion: null,
-        hasClaude: false,
-        isMax20: false,
-        hasOpenAI: false,
-        hasGemini: false,
-        hasCopilot: false,
-        hasCodex: false,
-        hasOpencodeZen: false,
-        hasZaiCodingPlan: false,
-        hasKimiForCoding: false,
-        hasOpencodeGo: false,
-        hasBailianCodingPlan: false,
-        hasMinimaxCnCodingPlan: false,
-        hasMinimaxCodingPlan: false,
-        hasVercelAiGateway: false,
-      }
-  const isUpdate = hasOpenCode && detected.isInstalled
+  const detected = detectCurrentConfig()
+  const hasOpenCode = true
+  const isUpdate = detected.isInstalled
 
   p.intro(color.bgMagenta(color.white(isUpdate ? " oMoMoMoMo... Update " : " oMoMoMoMo... ")))
 
@@ -89,7 +57,7 @@ export async function runTuiInstaller(args: InstallArgs, version: string): Promi
     }
   }
 
-  const config = await promptInstallConfig(detected, selectedPlatform, args.codexAutonomous)
+  const config = await promptInstallConfig(detected)
   if (!config) return 1
 
   if (config.hasOpenCode) {
@@ -150,70 +118,6 @@ export async function runTuiInstaller(args: InstallArgs, version: string): Promi
 
   p.note(formatConfigSummary(config), isUpdate ? "Updated Configuration" : "Installation Complete")
 
-  if (config.hasCodex) {
-    const codexInstallation = await detectCodexInstallation()
-    if (!codexInstallation.found) {
-      p.log.warn(formatCodexInstallationWarning(codexInstallation))
-    }
-
-    spinner.start("Installing Codex harness adapter")
-    try {
-      const codexResult = await runCodexInstaller({ autonomousPermissions: config.codexAutonomous })
-      spinner.stop(`Codex plugin installed to ${color.cyan(codexResult.configPath)}`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      spinner.stop(`Codex install failed ${color.yellow("[!]")}`)
-      if (!config.hasOpenCode) {
-        p.log.error(`Codex install failed: ${message}`)
-        p.outro(color.red("Installation failed."))
-        return 1
-      }
-      p.log.warn(`Codex install failed (OpenCode install remains successful): ${message}`)
-      p.log.info(
-        "The Codex harness is NOT installed. Fix the error above, then re-run: bunx oh-my-openagent install --platform=codex",
-      )
-    }
-  }
-
-  if (config.hasNative) {
-    spinner.start("Installing OmO Native")
-    const outcome = await runNativeInstall()
-    if (outcome.failure) {
-      spinner.stop(`OmO Native install failed ${color.yellow("[!]")}`)
-      for (const note of outcome.notes) p.log.info(note)
-      for (const warning of outcome.warnings) p.log.warn(warning)
-      for (const line of nativeInstallFailureLines(outcome.failure)) p.log.error(line)
-      p.outro(color.red("Installation failed."))
-      return 1
-    }
-    spinner.stop(nativeInstallSuccessLine(outcome.verified))
-    for (const note of outcome.notes) p.log.info(note)
-    for (const warning of outcome.warnings) p.log.warn(warning)
-    const setup = await offerNativeSetup(outcome, {
-      confirm: async (message) => {
-        const answer = await p.confirm({ message, initialValue: true })
-        return !p.isCancel(answer) && answer
-      },
-      onStart: (line) => p.log.step(line),
-    })
-    const followUp = nativeSetupFollowUpLine(setup)
-    if (followUp !== null) p.log.warn(followUp)
-  }
-
-  if (config.hasNativeDev) {
-    spinner.start("Installing the OmO Native development adapter")
-    try {
-      const nativeDevResult = await runNativeDevInstaller()
-      spinner.stop(`OmO Native development adapter installed to ${color.cyan(nativeDevResult.settingsPath)}`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      spinner.stop(`OmO Native development adapter install failed ${color.yellow("[!]")}`)
-      p.log.error(`OmO Native development adapter install failed: ${message}`)
-      p.outro(color.red("Installation failed."))
-      return 1
-    }
-  }
-
   p.log.success(color.bold(isUpdate ? "Configuration updated!" : "Installation complete!"))
   if (config.hasOpenCode) {
     p.log.message(`Run ${color.cyan("opencode")} to start!`)
@@ -228,18 +132,13 @@ export async function runTuiInstaller(args: InstallArgs, version: string): Promi
     "The Magic Word",
   )
 
-  if (shouldShowNativeEditionHint(config)) {
-    p.log.info(color.bold(NATIVE_EDITION_HINT_TITLE))
-    p.log.message(nativeEditionHintLines({ command: color.cyan, link: color.underline }).join("\n"))
-  }
-
   const shouldStar = await p.confirm({
     message: "Star the repos on GitHub?",
     initialValue: false,
   })
   if (!p.isCancel(shouldStar) && shouldStar) {
     spinner.start("Starring GitHub repositories")
-    const results = await starGitHubRepositories(selectedPlatform)
+    const results = await starGitHubRepositories()
     const failed = results.filter((result) => !result.ok)
     if (failed.length === 0) {
       spinner.stop("GitHub repositories starred")

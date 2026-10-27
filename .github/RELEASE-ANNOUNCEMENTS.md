@@ -24,7 +24,7 @@ the installer mirror must succeed (or be skipped because `skip_platform=true`).
 A failed or skipped gating job prevents posting. Cancellation also prevents
 posting. A separate recovery job runs with `always()` to warn and write the exact
 re-announce command to the summary when these conditions drop a fresh stable post.
-It skips LazyCodex-only and preparation
+It skips preparation
 runs and passes only the Discord webhook secret. A failed
 announcement does not make an otherwise successful publish run red; no PAT is needed for this path.
 The reusable job has read-only contents permission.
@@ -96,7 +96,7 @@ gh workflow run release-announce.yml -f tag=v5.1.29 -f dry_run=false
 
 ## Operator-side missed-post watch
 
-The maintainer runs a separate persistent monitor in their own ops tooling. It checks npm `omo-ai@latest` every
+The maintainer runs a separate persistent monitor in their own ops tooling. It checks npm `oh-my-openagent@latest` every
 5 minutes and alerts when a new stable version has no `#omo-releases` post
 30 minutes after it appears. This is operator-side tooling, not a guarantee
 provided by this repository. Workflow execution does not depend on the watch

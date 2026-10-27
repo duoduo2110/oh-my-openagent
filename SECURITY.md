@@ -16,7 +16,7 @@ Include in the report:
   `packages/*`, a hook, an MCP, the installer, and so on).
 - Reproduction steps or a minimal proof of concept.
 - The version (release tag or commit SHA) and the edition you ran
-  (`omo` / OmO Native, the OpenCode plugin, or the Codex edition).
+  (the OpenCode plugin).
 - Any mitigations or workarounds you have already applied.
 
 The GitHub Security tab is the only published contact. A private channel set

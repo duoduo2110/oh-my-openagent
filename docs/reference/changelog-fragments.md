@@ -23,8 +23,6 @@ sidecar ... ([#10640](https://github.com/code-yeongyu/oh-my-openagent/pull/10640
 After it, one block for each log you used to prepend to, naming the log:
 
 ```md
-<!-- changes-log: packages/omo-senpi/changes.md -->
-## 2026-10-24 - What changed in omo-senpi (#123)
 
 The text you used to prepend to that log.
 ```

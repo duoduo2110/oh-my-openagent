@@ -13,7 +13,7 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url))
 const rootPackageJsonPath = fileURLToPath(new URL("../package.json", import.meta.url))
 const publishWorkflowPath = fileURLToPath(new URL("../.github/workflows/publish.yml", import.meta.url))
 
-describe("node-target CLI build (lazycodex#47)", () => {
+describe("node-target CLI build", () => {
   test("build:cli-node produces a bundle that runs under plain node", () => {
     // #given
     const packageJson = JSON.parse(readFileSync(rootPackageJsonPath, "utf8")) as {
@@ -37,7 +37,7 @@ describe("node-target CLI build (lazycodex#47)", () => {
   }, 120_000)
 
   test("the node CLI bundle runs from an isolated payload with no node_modules in reach", async () => {
-    // #given the published lazycodex-ai payload ships dist/cli-node with .dependencies = {}
+    // #given the published payload ships dist/cli-node with .dependencies = {}
     // and no node_modules, so nothing may resolve from outside the bundle at load time
     const isolated = await mkdtemp(join(tmpdir(), "cli-node-isolated-"))
     await cp(`${repoRoot}dist/cli-node/index.js`, join(isolated, "index.js"))
@@ -70,7 +70,7 @@ describe("node-target CLI build (lazycodex#47)", () => {
     expect(report.summary?.total).toBeGreaterThan(0)
   }, 120_000)
 
-  test("the main build chain and the lazycodex-ai payload carry the node CLI", () => {
+  test("the main build chain carries the node CLI", () => {
     // #given
     const workflow = readFileSync(publishWorkflowPath, "utf8")
 
@@ -80,6 +80,6 @@ describe("node-target CLI build (lazycodex#47)", () => {
     // #then
     expect(cliNodeNode?.args, "the build orchestrator must produce dist/cli-node").toEqual(["run", "build:cli-node"])
     expect(selectBuildNodes(BUILD_NODES, undefined), "a default build must still run every node").toEqual([...BUILD_NODES])
-    expect(workflow, "lazycodex-ai files list must ship dist/cli-node").toContain('"dist/cli-node"')
+    expect(workflow, "the published files list must ship dist/cli-node").toContain('"dist/cli-node"')
   })
 })

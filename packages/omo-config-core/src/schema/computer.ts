@@ -6,7 +6,7 @@ const positiveInteger = z.number().int().positive()
 const nonNegativeInteger = z.number().int().nonnegative()
 
 /**
- * The `computer` block: desktop computer use in omo-senpi. Every key is optional because the defaults
+ * The `computer` block: desktop computer use. Every key is optional because the defaults
  * depend on the host (`enabled`, `stop_hotkey`); the computer-use component resolves them.
  */
 export const OmoComputerSettingsLayerSchema = z
@@ -14,7 +14,7 @@ export const OmoComputerSettingsLayerSchema = z
     enabled: z
       .boolean()
       .describe(
-        "Experimental: register the computer tool in OmO Native sessions (default: on where the host is supported; false leaves it unregistered)",
+        "Experimental: register the computer tool in standalone sessions (default: on where the host is supported; false leaves it unregistered)",
       ),
     display: z.string().min(1),
     showCursor: z.boolean().describe("Show the display-only macOS cursor overlay (default: true; false hides it)"),
@@ -35,7 +35,7 @@ export const OmoComputerSettingsLayerSchema = z
   .partial()
   .strict()
   .describe(
-    "Experimental computer use in OmO Native: screenshots, windows, accessibility trees and native mouse and keyboard input. Every key is optional; defaults depend on the host.",
+    "Experimental computer use: screenshots, windows, accessibility trees and native mouse and keyboard input. Every key is optional; defaults depend on the host.",
   )
 
 export const OmoComputerSettingsSchema = OmoComputerSettingsLayerSchema

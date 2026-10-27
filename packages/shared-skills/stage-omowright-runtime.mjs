@@ -2,7 +2,7 @@
 // Bundles the omowright library (root devDependency) into the `browser` skill as one
 // self-contained ESM file plus the page bundle it reads at import time, so both editions ship the
 // attached/owned browser engines without a nested node_modules tree. Mirrors the runtime-staging
-// contract of packages/omo-senpi/plugin/scripts/stage-ast-grep-mcp-runtime.mjs (manifest, sha256,
+// contract of the retired plugin staging script (manifest, sha256,
 // `--check` freshness gate).
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"

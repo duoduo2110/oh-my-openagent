@@ -3,9 +3,6 @@
 The wire contract for external viewers of DAG orchestration runs. Everything below is grounded in
 the shipped code:
 
-- `packages/senpi-task/src/dag/types.ts` (event union, envelope, activity type)
-- `packages/omo-senpi/src/components/task/dag-rpc-bridge.ts` (push channels)
-- `packages/omo-senpi/src/components/task/dag-rpc-handlers.ts` (request methods)
 
 A viewer can be implemented from this document alone. Schema version is `1` on every payload that
 carries one; a consumer must reject payloads with an unknown `schemaVersion`.

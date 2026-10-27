@@ -25,8 +25,6 @@ Every `BoulderState` carries `active_work_id` + a `works` map. The root-level fi
 
 - **omo-opencode** (`workspace:*`): `features/boulder-state/*` re-exports; hooks `atlas`, `ulw-execute`, `todo-continuation-enforcer`; CLI `boulder` command.
 - **omo-codex** (`file:` dep): `plugin/components/ulw-execute-continuation/boulder-reader.ts`.
-- **omo-senpi** (`workspace:*`): `src/components/ulw-execute-continuation/boulder-eligibility.ts` reads work state with `senpi:`-prefixed session ids.
-- Both ulw-execute read paths (`omo-opencode` hook, `omo-senpi` continuation component) call `reconcileStaleWorks` first and pass the agent sessions directory resolved by `omo-senpi`'s `resolveAgentSessionsDirectory`; this package resolves no home path of its own.
 
 ## NOTES
 

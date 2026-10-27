@@ -1,6 +1,5 @@
 # What Is Oh My OpenAgent?
 
-Oh My OpenAgent is a multi-model agent orchestration harness. This guide covers OmO Native, the standalone `omo` command; the OpenCode and Codex editions ship separately. It turns a single AI agent into a coordinated development team that actually ships code.
 
 Not locked to Claude. Not locked to OpenAI. Not locked to anyone.
 
@@ -93,7 +92,6 @@ For a deep dive into how the pieces collaborate, see the [Orchestration System G
 
 ---
 
-## How OmO Native delegates
 
 ### The main agent
 

@@ -67,7 +67,7 @@ async function writeFakeBun(
   return path;
 }
 
-describe("platform launcher runtime fallback (lazycodex#47)", () => {
+describe("platform launcher runtime fallback (packaging#47)", () => {
   it("#given bun missing entirely #when launching #then falls back to the node CLI", async () => {
     const fixture = await createLauncherFixture({ withNodeCli: true });
 

@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 const REPOSITORY_ROOT = repositoryRootFromMetaUrl(import.meta.url)
 const OLD_MODEL_ID = ["gpt-5.4", "mini"].join("-")
 const OLD_DISPLAY_NAME = ["GPT 5.4", "Mini"].join(" ")
-// Models LazyCodex once bundled, matched only to move pre-receipt installs off them (#5245); the bundle inlines it.
+// Matched only to move pre-receipt installs off them (#5245); the bundle inlines it.
 const HISTORICAL_MODEL_RECORDS = new Set([
   "packages/omo-codex/src/install/managed-agent-model-defaults.ts",
   "packages/omo-codex/scripts/install-dist/install-local.mjs",

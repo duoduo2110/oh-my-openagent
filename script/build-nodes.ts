@@ -8,41 +8,26 @@ export type BuildNode = {
 const OPENTUI_EXTERNALS = ["@opentui/core", "@opentui/keymap", "@opentui/solid"]
 
 export const BUILD_NODES: BuildNode[] = [
-	{ id: "service-auth", command: "bun", args: ["script/build-service-auth.ts"], deps: [] },
-	{ id: "reflection-lock", command: "bun", args: ["script/build-reflection-lock.ts"], deps: [] },
 	{ id: "git-bash-mcp", command: "bun", args: ["run", "build:git-bash-mcp"], deps: [] },
 	{ id: "ast-grep-mcp", command: "bun", args: ["run", "build:ast-grep-mcp"], deps: [] },
 	{ id: "lsp-tools-mcp", command: "bun", args: ["run", "build:lsp-tools-mcp"], deps: [] },
 	{ id: "lsp-daemon", command: "bun", args: ["run", "build:lsp-daemon"], deps: [] },
-	{ id: "codex-plugin", command: "bun", args: ["run", "build:codex-plugin"], deps: ["git-bash-mcp", "lsp-tools-mcp", "lsp-daemon"] },
-	{ id: "senpi-plugin", command: "bun", args: ["run", "build:senpi-plugin:stage"], deps: ["ast-grep-mcp", "lsp-daemon", "codex-plugin"] },
 	{ id: "index", command: "bun", args: ["build", "packages/omo-opencode/src/index.ts", "--outdir", "dist", "--target", "bun", "--format", "esm", "--external", "zod"], deps: [] },
 	{ id: "tui", command: "bun", args: ["build", "packages/omo-opencode/src/tui.ts", "--outdir", "dist", "--target", "bun", "--format", "esm", ...OPENTUI_EXTERNALS.flatMap((name) => ["--external", name])], deps: [] },
-	{ id: "shared-skills-assets", command: "bun", args: ["run", "build:shared-skills-assets"], deps: ["index"] },
+	{ id: "shared-skills-assets", command: "bun", args: ["run", "build:skills-assets"], deps: ["index"] },
 	{ id: "node-require-shim", command: "bun", args: ["run", "build:node-require-shim"], deps: ["index"] },
 	{ id: "declarations", command: "tsc", args: ["--emitDeclarationOnly"], deps: [] },
 	{ id: "cli", command: "bun", args: ["build", "packages/omo-opencode/src/cli/index.ts", "--outdir", "dist/cli", "--target", "bun", "--format", "esm"], deps: [] },
 	{ id: "cli-node", command: "bun", args: ["run", "build:cli-node"], deps: [] },
-	{ id: "codex-install", command: "bun", args: ["run", "build:codex-install"], deps: [] },
 	{ id: "schema", command: "bun", args: ["run", "build:schema"], deps: [] },
 	{ id: "omo-schema", command: "bun", args: ["run", "build:omo-schema"], deps: [] },
 ]
 
 /**
  * A profile names the nodes a consumer actually needs; its dependency closure is added
- * automatically.
- *
- * `omo-native` keeps the two MCP runtime dists the binary embeds. They cannot be left to
- * `ensurePrebuiltNativeInputs`, which builds them only when the artifact is ABSENT: a dist left
- * in the cache clone by an older commit would then be embedded under the new commit's
- * provenance. Everything else this graph emits (the OpenCode plugin bundle, the Codex Light
- * plugin and its components, the CLI, the TUI, schemas, declarations, and the source-tree copy
- * of the Senpi plugin that `build-omo-native.ts` rebuilds for itself) is never read by the
- * binary build.
+ * automatically. No profile is defined while the plugin bundle is the only consumer.
  */
-export const BUILD_PROFILES: Record<string, readonly string[]> = {
-	"omo-native": ["lsp-daemon", "ast-grep-mcp", "service-auth"],
-}
+export const BUILD_PROFILES: Record<string, readonly string[]> = {}
 
 export function selectBuildNodes(
 	graph: readonly BuildNode[],

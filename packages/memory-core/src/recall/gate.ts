@@ -84,7 +84,7 @@ export function describeInvalidHint(hint: string): InvalidHintReason | undefined
  *
  * This is the REPLAY half of the contract, and deliberately not `describeInvalidHint`: pending
  * payloads and stored `omo-kibitzer:nudged` entries were admitted under whatever contract held when
- * they were accepted, so reading them back (`parseNudge` below, omo-senpi's notice renderers) must
+ * they were accepted, so reading them back (`parseNudge` below, the notice renderers) must
  * not retroactively drop a nudge that was phrased as an instruction. Admission is where the
  * nudge-only rule bites.
  */

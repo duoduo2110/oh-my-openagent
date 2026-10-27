@@ -108,12 +108,7 @@ export function isScannedSourceFile(relativePath: string): boolean {
 // evaluateBuiltRuntimeProbe fails CI on a missing entry and on any
 // staged runtime file the list does not name, so a staging-path change
 // cannot silently shrink the guard's scope.
-export const KNOWN_BUILT_RUNTIMES = [
-  "packages/omo-codex/plugin/skills/browser/runtime/omowright/index.js",
-  "packages/omo-codex/plugin/skills/browser/runtime/omowright/page-bundle.js",
-  "packages/omo-senpi/plugin/skills/browser/runtime/omowright/index.js",
-  "packages/omo-senpi/plugin/skills/browser/runtime/omowright/page-bundle.js",
-]
+export const KNOWN_BUILT_RUNTIMES: string[] = []
 
 // Truly third-party npm-dependency bundles would be named here, one
 // comment per bundle. None are tracked today: git ls-files already keeps
@@ -206,11 +201,7 @@ export function discoverPluginBuiltRuntimes(): string[] {
 
 // Scan roots, derived from what actually ships (review O3):
 // - the npm payload: root package.json "files" (bin, postinstall.mjs,
-//   script/qa, packages/shared-skills, packages/omo-codex plugin+scripts,
-//   lsp-core src, component dists, ...);
-// - the omo binary payload: packages/omo-native/package.json "files"
-//   (bin, plugin) plus its root *.ts compile inputs, which
-//   script/build-omo-binary.ts compiles into the omo binary;
+//   script/qa, packages/shared-skills, lsp-core src, component dists, ...);
 // - every package's src/ and plugin/ trees, the inputs of the dist build.
 export function shippedRootEntries(): string[] {
   const roots = new Set<string>()
@@ -219,14 +210,10 @@ export function shippedRootEntries(): string[] {
     for (const entry of parsed.files ?? []) roots.add(prefix + entry)
   }
   readFilesField("package.json", "")
-  readFilesField("packages/omo-native/package.json", "packages/omo-native/")
   for (const entry of readdirSync(path.join(WORKSPACE_ROOT, "packages"), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
     roots.add("packages/" + entry.name + "/src")
     roots.add("packages/" + entry.name + "/plugin")
-  }
-  for (const tracked of listTrackedFiles()) {
-    if (/^packages\/omo-native\/[^/]+\.(ts|tsx|js|mjs|cjs)$/.test(tracked)) roots.add(tracked)
   }
   return [...roots].sort()
 }

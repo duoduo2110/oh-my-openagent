@@ -35,7 +35,7 @@ The refactor splits packages into strict layers by runtime boundary:
 | Platform | Generated Node launcher packages per target | Deployment artifacts. Never imported. |
 | Web | Marketing site | Independent application. |
 
-**Dependency rule:** The intended DAG flows downward: Adapters depend on Core, MCP, and Skills, while Platform and Web are leaves. The source-backed exceptions are the intentional same-layer adapter-support edge `@oh-my-opencode/omo-senpi -> @oh-my-opencode/senpi-task` (`senpi-task` is adapter support consumed by `omo-senpi`) and the transitional adapter-to-adapter edge `@oh-my-opencode/omo-opencode -> @oh-my-opencode/omo-codex` for Codex installer/distribution integration; both are outside the target layering.
+**Dependency rule:** The intended DAG flows downward: the OpenCode adapter depends on Core, MCP and Skills. The source-backed exceptions are documented in the file tree above.
 
 **Migration principle:** Existing behavior is preserved. Nothing breaks. Each extraction is a pure move: copy logic into Core, make the original location re-export from Core, verify tests still pass, then delete the duplicate in the other repositories.
 
@@ -74,9 +74,9 @@ The industry changes too fast. Fixed patterns and agreed conventions should be i
 
 We express what each component does in markdown documentation, not in interface definitions.
 
-### Status: omo.json config core (landed senpi-first)
+### Status: omo.json config core (landed)
 
-The first concrete step toward a harness-neutral config layer has landed: `omo-config-core` provides an `omo.json` schema, a walked multi-layer loader, and a comment-preserving atomic writer as pure, harness-neutral code, and the Senpi adapter's `task` component reads it in production. This was delivered senpi-first on purpose - Senpi had no existing config surface to preserve, so it was the safe place to prove the schema. The OpenCode edition still reads its own `oh-my-openagent.json` chain, and the two files have zero interaction today. Adopting `omo.json` in the OpenCode edition, and any migration path from `oh-my-openagent.json`, is the next phase. See [`docs/reference/omo-json.md`](docs/reference/omo-json.md).
+The first concrete step toward a harness-neutral config layer has landed: `omo-config-core` provides an `omo.json` schema, a walked multi-layer loader, and a comment-preserving atomic writer as pure, harness-neutral code. The OpenCode adapter reads it in production through the same loader.
 
 ## Why Not OpenCode-Native
 

@@ -2,7 +2,6 @@
 
 You've been running omo as the OpenCode plugin (oh-my-openagent 4.19.x, or a 5.x beta) and want the standalone `omo` command instead. This page walks that move, one command per step. Setup never writes to OpenCode's files, and you can run both editions side by side for as long as you like. The one OpenCode file omo does move, on its first session, is covered in [Keeping OpenCode around](#keeping-opencode-around).
 
-The standalone edition is called **OmO Native**. It ships as the npm package `omo-ai`, installs one command (`omo`), and runs a pinned senpi engine with the OMO extension built in. No host app, no plugin registration.
 
 Sections:
 
@@ -21,7 +20,6 @@ Late 4.x releases of oh-my-openagent and oh-my-opencode, up to and including 4.1
 omo --version
 ```
 
-A bare version such as `4.19.4` means the legacy package still owns the name. OmO Native answers with `omo 5.0.0 (engine: senpi ...)` instead.
 
 To see whether npm installed the legacy copy:
 
@@ -29,7 +27,6 @@ To see whether npm installed the legacy copy:
 npm ls -g oh-my-openagent oh-my-opencode
 ```
 
-If bun installed it instead, it sits under `~/.bun/install/global/node_modules/`. Either way, `omo doctor` names the package, its version and the directory once OmO Native is in, so you don't have to hunt for it now.
 
 You don't have to remove anything before installing. The installer in the next step handles the stale command for you.
 
@@ -47,14 +44,10 @@ Without bun, use `npx oh-my-openagent install --platform=native`. It needs oh-my
 
 What the command does, in order:
 
-1. Looks for a global `omo` owned by oh-my-openagent, oh-my-opencode or lazycodex and removes that one file. The package that owns it and every other command it installs stay in place. An installer doesn't get to uninstall someone's whole global package.
-2. Runs `bun add -g omo-ai` (or `npm i -g omo-ai`).
-3. Checks that `omo --version` on your PATH now answers as omo-ai. If another `omo` still shadows it, the installer prints the exact `export PATH="...:$PATH"` line that fixes the order.
 4. Offers to run `omo setup` right away. With `--no-tui` it prints the command to run instead.
 
 Why the raw install isn't enough on an older machine: npm refuses to overwrite the existing `omo` (EEXIST), and bun installs beside it, so `omo --version` keeps printing `4.19.4`. The installer removes the stale command first.
 
-If you already ran `bun add -g omo-ai` by hand and the old `omo` still wins, run the installer line anyway. It's idempotent, and it prints the repair it made.
 
 ## Setup
 
@@ -98,7 +91,6 @@ Each refused item is named in the summary with its reason and the fix.
 
 - `small_model`: omo has no small-model setting.
 - OpenCode's own primary agents `build` and `plan`: omo's main session has no per-mode agent, it runs the default model.
-- An agent name omo doesn't have (for example `oracle`): omo's agents are `explore`, `librarian`, `plan-consultant`, `plan-reviewer` and the three `omo-native-*` reviewers. Route that work through a category instead. Setup names each dropped one rather than creating a promptless agent of that name.
 - Overrides on a provider omo already serves (a custom `baseURL` for `openai`, say): set them in `models.json` by hand if you need them.
 - OpenCode UI settings (`theme`, `share`, `autoupdate`, keybinds), tool permissions and OpenCode plugin hooks: these belong to OpenCode's TUI and plugin system and have no counterpart in the engine.
 
@@ -159,7 +151,6 @@ omo doctor
 
 Three lines matter here.
 
-- `WARN another omo precedes omo-ai on PATH ...`: a stale legacy `omo` still wins. The line names the fix (the installer command from above, or removing that one file).
 - `WARN legacy package oh-my-openagent@4.19.4 is still installed globally ...`: informational until you decide to remove it. The line gives the remove command for the package manager that installed it.
 - `INFO OpenCode still loads the oh-my-openagent plugin (~/.config/opencode/opencode.jsonc)`: this is the coexistence case. Keep it if you still use OpenCode; otherwise remove the plugin entry.
 
@@ -173,7 +164,6 @@ Update omo with its own command:
 omo update
 ```
 
-It prints the package-manager line it runs (`bun add -g omo-ai`, or `npm i -g omo-ai` for an npm install) and then the version change. `omo update --print` shows the line without running it. The engine is pinned by the package, so this is the only update path; there's no separate engine update.
 
 Removing the legacy package once you're settled: use the package manager that installed it. The `WARN legacy package` line of `omo doctor` names it and prints the exact command. For an npm install:
 
@@ -183,14 +173,9 @@ npm uninstall -g oh-my-openagent
 
 For a bun install, `bun remove -g oh-my-openagent`. The other manager's command doesn't help: `bun remove -g` on an npm install exits cleanly and leaves the package where it was. Use `oh-my-opencode` instead if that's the name you had.
 
-npm unlinks every bin name the package declared, including an `omo` that an npm-installed omo-ai now owns. If you installed omo-ai with npm too, run `npm i -g omo-ai` right after the uninstall to put the command back. An omo-ai installed with bun keeps its `omo`. The installer prints the same warning when it installs omo-ai with npm after removing a legacy `omo`.
 
-Removing OmO Native itself:
 
 ```bash
-bun remove -g omo-ai
 ```
 
-(or `npm uninstall -g omo-ai`). On a bun install, omo-ai replaces bun's `omo` symlink with a small launcher shim so each start skips a node boot, and `bun remove` leaves that file behind; delete it with `rm ~/.bun/bin/omo` (the shim says so in its header). Your state under `~/.omo/agent/` and `~/.omo/omo.jsonc` stays on disk; delete it yourself if you want a clean slate. The OpenCode plugin, if you kept it, is unaffected.
 
-See also: [Installation](./installation.md#omo-native-omo-via-omo-ai) for where omo keeps its state, and [Agent Model Matching](./agent-model-matching.md) for choosing models per category.

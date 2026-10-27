@@ -71,7 +71,7 @@ test("#given release automation #when parsed #then published events, safe dispat
     outputs: z.record(z.string(), z.string()).optional(),
   }).passthrough()) }).parse(Bun.YAML.parse(await Bun.file(".github/workflows/publish.yml").text()))
   const createRelease = Object.values(publisher.jobs).flatMap((job) => job.steps ?? [])
-    .find((item) => item.run && /gh\s+release\s+create\b/.test(item.run) && !item.run.includes("--repo code-yeongyu/lazycodex"))
+    .find((item) => item.run && /gh\s+release\s+create\b/.test(item.run) && !item.run.includes("--repo code-yeongyu/other"))
   expect(evaluateExpression(z.string().parse(createRelease?.env?.GH_TOKEN), { secrets: { GITHUB_TOKEN: "publisher-token" } })).toBe("publisher-token")
   for (const dist_tag of ["", "beta"]) {
     expect(evaluateExpression(z.string().parse(createRelease?.env?.DIST_TAG),
@@ -104,7 +104,7 @@ test("#given release automation #when parsed #then published events, safe dispat
 
 const published = {
   created: "true", distTag: "", release: "success", verify: "success", mirror: "success", platform: "success",
-  skipPlatform: false, lazycodexOnly: false, prepared: "prepared-sha", runCancelled: false, expected: true,
+  skipPlatform: false, internalOnly: false, prepared: "prepared-sha", runCancelled: false, expected: true,
 }
 test.each([
   { ...published, name: "fresh stable" },
@@ -124,7 +124,7 @@ test.each([
   { ...published, name: "cancelled mirror", mirror: "cancelled", expected: false },
   { ...published, name: "already existed", created: "false", expected: false },
   { ...published, name: "beta", distTag: "beta", expected: false },
-  { ...published, name: "LazyCodex only", lazycodexOnly: true, expected: false },
+  { ...published, name: "internal only", internalOnly: true, expected: false },
   { ...published, name: "preparation", prepared: "", expected: false },
 ])("#given $name #when Actions evaluates the caller #then announcement eligibility follows creation", async (scenario) => {
   const workflow = z.object({ jobs: z.object({
@@ -136,7 +136,7 @@ test.each([
   // Actions implicitly prepends success() unless a status-check function exists.
   const condition = /\b(?:always|success|failure|cancelled)\s*\(/.test(expression) ? expression : `success() && (${expression})`
   const context = {
-    inputs: { lazycodex_only: scenario.lazycodexOnly, prepared_release_sha: scenario.prepared, skip_platform: scenario.skipPlatform },
+    inputs: { internal_only: scenario.internalOnly, prepared_release_sha: scenario.prepared, skip_platform: scenario.skipPlatform },
     needs: {
       release: { result: scenario.release, outputs: { created: scenario.created } },
       "release-metadata": { result: "success", outputs: { dist_tag: scenario.distTag } },
@@ -149,7 +149,7 @@ test.each([
   const statuses = [scenario.release, scenario.verify, scenario.mirror, scenario.platform]
   expect(Boolean(evaluateExpression(condition, context, statuses, scenario.runCancelled))).toBe(scenario.expected)
   const recoveryExpected = scenario.created === "true" && scenario.distTag === "" &&
-    !scenario.lazycodexOnly && scenario.prepared !== "" && !scenario.expected
+    !scenario.internalOnly && scenario.prepared !== "" && !scenario.expected
   expect(Boolean(evaluateExpression(workflow.jobs["release-announce-recovery"].if, context, statuses, scenario.runCancelled))).toBe(recoveryExpected)
 })
 

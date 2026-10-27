@@ -1,5 +1,4 @@
 import type { VariantTable } from "./types"
-import codexPrompt from "../prompts/ultrawork/codex.md"
 import defaultPrompt from "../prompts/ultrawork/default.md"
 import geminiPrompt from "../prompts/ultrawork/gemini.md"
 import glmPrompt from "../prompts/ultrawork/glm.md"
@@ -11,7 +10,6 @@ export const ULTRAWORK_GEMINI_PROMPT = geminiPrompt
 export const ULTRAWORK_GLM_PROMPT = glmPrompt
 export const ULTRAWORK_GPT_PROMPT = gptPrompt
 export const ULTRAWORK_PLANNER_PROMPT = plannerPrompt
-export const CODEX_ULTRAWORK_PROMPT = codexPrompt
 
 export const ultraworkPromptVariants = {
   planner: {
@@ -38,13 +36,5 @@ export const ultraworkPromptVariants = {
     kind: "bundled",
     content: defaultPrompt,
     filePath: "packages/prompts-core/prompts/ultrawork/default.md",
-  },
-} satisfies VariantTable
-
-export const codexUltraworkPromptVariants = {
-  codex: {
-    kind: "bundled",
-    content: codexPrompt,
-    filePath: "packages/prompts-core/prompts/ultrawork/codex.md",
   },
 } satisfies VariantTable

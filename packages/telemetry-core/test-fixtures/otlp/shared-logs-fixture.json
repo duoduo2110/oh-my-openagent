@@ -10,7 +10,7 @@
             "key": "service.name",
             "value": {
               "t": "s",
-              "v": "omo-senpi"
+              "v": "omo-opencode"
             }
           },
           {
@@ -53,7 +53,7 @@
         "schemaUrl": "",
         "scopes": [
           {
-            "name": "omo-senpi",
+            "name": "omo-opencode",
             "version": "3.17.0",
             "attributes": [],
             "schemaUrl": "",

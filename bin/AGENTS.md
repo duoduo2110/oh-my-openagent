@@ -8,7 +8,6 @@ Node-side launch surface for every public CLI alias. The root shim resolves a pl
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Main launcher | `oh-my-opencode.js` | Entry for `oh-my-opencode`, `oh-my-openagent`, `omo`, `lazycodex`, and `lazycodex-ai` |
 | Platform selection | `platform.js` | OS/arch/libc package candidates and baseline fallback |
 | Platform types | `platform.d.ts` | Public declarations for the plain-JS selector |
 | Version mismatch output | `version-mismatch.js` | User-facing installed-wrapper/platform-package mismatch diagnostics |
@@ -16,7 +15,6 @@ Node-side launch surface for every public CLI alias. The root shim resolves a pl
 
 ## RUNTIME FLOW
 
-`oh-my-opencode.js` derives the invocation name, optionally routes the LazyCodex Node installer, resolves an ordered list of `oh-my-opencode-*` or `oh-my-openagent-*` platform package candidates, then spawns the first installed package's generated `bin/oh-my-opencode.js` launcher. Each generated Node launcher runs root `dist/cli` with Bun and, when Bun is missing or exits with `SIGILL`, falls back to root `dist/cli-node` with Node. The root shim retains ordered package fallback compatibility, including x64 `-baseline` candidates, but current generated platform payloads are identical Node scripts, so a Bun `SIGILL` is normally handled inside the selected launcher rather than by switching to a baseline package.
 
 ## CONVENTIONS
 

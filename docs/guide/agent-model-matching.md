@@ -8,13 +8,11 @@ Launch data lives in `packages/model-core/src/fable-55-launch.ts` (`FABLE_55_LAU
 
 > **For agents and users**: the four model-profile lanes that pick the main agent's model, which models carry tuned prompt presets, how curated agents and categories keep their own chains, and how to change any of it without breaking things.
 
-**OmO Native sets all of this up on its own, so you can probably skip this page.** With nothing in `omo.json`, a fresh session starts on Daily · Normal (Claude Opus 5.5, then Kimi K3, then GLM 5.3, whichever you have connected), or on the first other lane that resolves, and every category and curated agent picks its model from its own chain against the providers you are logged in to. A category that none of your providers can serve is left off the main agent's list, so it is never picked and then fails. Read on when you want to change a default, or when you want to know why a session landed on the model it did.
 
 ---
 
 ## Four lanes pick the main agent's model
 
-The main agent thinks with your session model. The easiest way to choose it is a **model profile**: a named, ordered chain you pick by lane (Daily or Obsessive, Normal or Heavy). At session start omo walks the chain and applies the first model your connected providers serve. Chains live in [`packages/omo-senpi/src/components/model-profile/builtin-profiles.ts`](../../packages/omo-senpi/src/components/model-profile/builtin-profiles.ts); every rung lists each provider that serves the model, so a Copilot-only or gateway-only account resolves the same way a direct API key does.
 
 | Lane | Id | Pick it for | Chain |
 | --- | --- | --- | --- |
@@ -31,7 +29,6 @@ Activate a lane with a single key in `omo.json`:
 { "model_profile": "daily-normal" }
 ```
 
-The session prints `OmO Native: model profile "daily-normal" (Daily · Normal) selected anthropic-subscription/claude-opus-5-5 medium; mid-session fallback follows senpi's retry chains`, naming any skipped rungs. A few rules worth knowing:
 
 - **Pins win.** Write a literal `provider/model` into the same key (`"model_profile": "anthropic/claude-opus-5-5"`) and that exact model is applied; anything containing `/` is a pin.
 - **Explicit models are never clobbered.** A `--model` flag, a scoped model, a resumed session, and a fork keep their own model; the profile only touches a fresh session.
@@ -101,7 +98,6 @@ A model profile picks the main session model and nothing else. Every delegated c
 
 ### Curated agents
 
-Delegation goes through the `task` tool. Four curated read-only agents have their own fallback chains, hardcoded in [`packages/senpi-task/src/agents/builtin/fallback-chains.ts`](../../packages/senpi-task/src/agents/builtin/fallback-chains.ts). The first rung your connected providers can serve wins.
 
 | Agent | Job | Primary | Chain |
 | --- | --- | --- | --- |
@@ -116,9 +112,6 @@ The ulw-loop reviewers have no hand-written chains. Each one names categories on
 
 | Agent | Categories, in order |
 | --- | --- |
-| `omo-native-code-reviewer` | `unspecified-high` |
-| `omo-native-gate-reviewer` | `deep-high`, then `unspecified-high` |
-| `omo-native-qa-executor` | `deep-low`, then `unspecified-low` |
 
 Overriding one of those categories in `omo.json` moves the reviewer with it.
 
@@ -148,7 +141,6 @@ Provisional Claude Fable 5.5 precedes Fable 5.1 in `plan-consultant`, `architect
 
 ### Categories
 
-When the main agent delegates implementation work, it doesn't pick a model name. It picks a **category**, and the category spawns the category worker: a fresh worker session configured by the category's model and skills. Chains live in [`packages/senpi-task/src/category/fallback-chains.ts`](../../packages/senpi-task/src/category/fallback-chains.ts); defaults, descriptions and prompt appends live next to them in `packages/senpi-task/src/category/*-categories.ts`.
 
 | Category | Used for | Default | Chain |
 | --- | --- | --- | --- |
@@ -264,7 +256,6 @@ Because this is your own configuration, `deep-low` stays on the list even on a m
 
 ## How model resolution works
 
-For the main agent, resolution happens once, at session start (`packages/omo-senpi/src/components/model-profile/index.ts`). It runs for OmO Desktop and headless sessions. The interactive TUI skips it, so a TUI session keeps the model it started with, or the one Senpi's recommended-model switch moved it to, whatever `model_profile` says.
 
 ```
 1. --model flag or scoped model    -> kept as is; the profile never runs
@@ -294,6 +285,3 @@ Your explicit configuration always wins. If you set a model for a category or ag
 - [Installation Guide](./installation.md): setup and provider authentication
 - [Orchestration System Guide](./orchestration.md): how the main agent delegates to categories and curated agents
 - [omo.json Reference](../reference/omo-json.md): `model_profiles`, `model_profile`, `agents`, `categories`, and `models` keys
-- [`packages/omo-senpi/src/components/model-profile/builtin-profiles.ts`](../../packages/omo-senpi/src/components/model-profile/builtin-profiles.ts): the four lane chains
-- [`packages/senpi-task/src/agents/builtin/fallback-chains.ts`](../../packages/senpi-task/src/agents/builtin/fallback-chains.ts): curated agent chains
-- [`packages/senpi-task/src/category/fallback-chains.ts`](../../packages/senpi-task/src/category/fallback-chains.ts): category chains

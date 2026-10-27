@@ -108,7 +108,7 @@ describe("release announcement delivery", () => {
     expect(fake.calls).toHaveLength(0)
   })
 
-  test.each(["v5.1.29-beta.1", "v5.1.29-lazycodex.1", "5.1.29", "_assets"])(
+  test.each(["v5.1.29-beta.1", "v5.1.29-other.1", "5.1.29", "_assets"])(
     "#given nonstable published tag %s #when triggered #then no requests are made", async (value) => {
       const fake = transport([])
       expect(await announce({ ...options, tag: value, event: "release" }, fake.fetch)).toBe("skipped")

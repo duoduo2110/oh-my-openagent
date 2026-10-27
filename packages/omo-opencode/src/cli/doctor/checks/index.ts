@@ -9,15 +9,11 @@ import { checkModels } from "./model-resolution"
 import { checkTelemetry } from "./telemetry"
 import { checkTeamMode } from "./team-mode"
 import { checkTuiPluginConfig } from "./tui-plugin-config"
-import { checkCodex, gatherCodexSummary } from "./codex"
 import { gatherEditionDistTags, resolveLatestVersion } from "./latest-version"
-import { CODEX_COMPONENTS_CHECK_ID, CODEX_COMPONENTS_CHECK_NAME, checkCodexComponents } from "./codex-components"
-import { checkCodexRuntimeWrapper } from "./codex-runtime-wrapper"
 
 export type { CheckDefinition }
 export * from "./model-resolution-types"
 export { gatherSystemInfo, gatherToolsSummary }
-export { gatherCodexSummary }
 export { gatherEditionDistTags, resolveLatestVersion }
 
 export function getAllCheckDefinitions(): CheckDefinition[] {
@@ -63,27 +59,6 @@ export function getAllCheckDefinitions(): CheckDefinition[] {
       id: CHECK_IDS.TEAM_MODE,
       name: CHECK_NAMES[CHECK_IDS.TEAM_MODE],
       check: checkTeamMode,
-    },
-  ]
-}
-
-export function getCodexCheckDefinitions(): CheckDefinition[] {
-  return [
-    {
-      id: CHECK_IDS.CODEX,
-      name: CHECK_NAMES[CHECK_IDS.CODEX],
-      check: checkCodex,
-      critical: true,
-    },
-    {
-      id: CODEX_COMPONENTS_CHECK_ID,
-      name: CODEX_COMPONENTS_CHECK_NAME,
-      check: checkCodexComponents,
-    },
-    {
-      id: "codex-runtime-wrapper",
-      name: "codex-runtime-wrapper",
-      check: checkCodexRuntimeWrapper,
     },
   ]
 }

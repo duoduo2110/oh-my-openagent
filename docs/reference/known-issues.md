@@ -43,9 +43,7 @@ Tracks bugs that are present in the current release but have been intentionally 
 - **Workaround**: Repeat `ulw` or `ultrawork` in every follow-up message that should stay in ultrawork mode. For long tasks, prefer starting a fresh prompt that includes the keyword instead of assuming the mode remains active.
 - **Status**: Open. Tracked at https://github.com/code-yeongyu/oh-my-openagent/issues/5806.
 
-## #5838 - LazyCodex frontend runs can skip the visual QA gate
 
-- **Affects**: Codex Light / LazyCodex sessions where the frontend skill is used for UI work.
 - **Symptom**: The frontend skill prompt requires a visual QA evidence pass, but Codex currently enforces that requirement through prose instructions rather than a hard completion gate. Under long context or inconvenient browser setup, the model can report completion without screenshots or a dual-oracle visual verdict.
 - **Workaround**: Add an explicit instruction such as "verify with visual-qa before claiming done" to frontend prompts, and require screenshot/evidence output before accepting UI work as complete. If no rendered surface is available, ask the agent to state that limitation directly.
 - **Status**: Open. Tracked at https://github.com/code-yeongyu/oh-my-openagent/issues/5838.
@@ -169,7 +167,6 @@ BLOCKER-4 is resolved in v4.2.1. Delegated child sessions now retain the first p
 
 ## #5021 — Codex planner or reviewer subagents can appear stuck
 
-- **Affects**: LazyCodex / OMO Codex planner and reviewer flows that use native Codex subagents.
 - **Symptom**: A parent session can receive repeated `wait_agent` timeouts while a planner or reviewer subagent remains `running`. Follow-up prompts may not recover the run, and the session can look stuck until the child agent is closed or respawned.
 - **Workaround**: Do not spin short `wait_agent` cycles; back off between calls by doubling the timeout up to about 5 minutes. Send one targeted follow-up that asks the child to return a result or `BLOCKED`, then record the child as inconclusive before closing or respawning it. Do not treat repeated wait timeouts as proof that the child finished.
 - **Status**: Open. Tracked at https://github.com/code-yeongyu/oh-my-openagent/issues/5021.

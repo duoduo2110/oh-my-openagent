@@ -57,7 +57,7 @@ function createCapturingFactory(capturedMessages: TelemetryCaptureMessage[]): Te
 }
 
 describe("posthog telemetry client", () => {
-  test("#given the unconfigured OmO Native placeholder and clean env #when clients are created #then telemetry fails closed without constructing transports", () => {
+  test("#given the unconfigured placeholder and clean env #when clients are created #then telemetry fails closed without constructing transports", () => {
     let transportsCreated = 0
     const input = {
       env: {},
@@ -102,7 +102,7 @@ describe("posthog telemetry client", () => {
     })).toBe(true)
   })
 
-  test("#given a real OmO Native default replaces the placeholder #when enabled state is checked #then telemetry activates without another flag", () => {
+  test("#given a real default replaces the placeholder #when enabled state is checked #then telemetry activates without another flag", () => {
     expect(isTelemetryClientEnabled({
       env: {},
       product: {

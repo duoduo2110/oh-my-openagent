@@ -24,7 +24,6 @@ src/
 | Add/modify a tool schema | `src/mcp.ts` (tool defs) + `src/tools/*.ts` |
 | sg process invocation, timeouts | `src/sg-runner.ts` |
 | Pattern validation hints | `src/pattern-hints.ts` |
-| Senpi plugin staging | `packages/omo-senpi/plugin/scripts/stage-ast-grep-mcp-runtime.mjs` (copies `dist/cli.js` to plugin `runtime/ast-grep-mcp/`) |
 
 ## CONVENTIONS
 

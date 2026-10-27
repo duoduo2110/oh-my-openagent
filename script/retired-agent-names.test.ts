@@ -21,20 +21,11 @@ export interface GovernedSurface {
   /**
    * Only the six retired names apply; `sisyphus` and agent-context `oracle` stay legal. Used for
    * shared-skill sources whose OpenCode literals the senpi sync overlay re-routes
-   * (`packages/omo-senpi/plugin/scripts/senpi-skill-roster-overlay.mjs`); the synced output is
-   * gated separately by `packages/omo-senpi/src/skills-sync.test.ts`.
    */
   readonly retiredNamesOnly?: boolean
 }
 
 export const GOVERNED_SURFACES: readonly GovernedSurface[] = [
-  { glob: "packages/omo-senpi/skills/**" },
-  { glob: "packages/omo-senpi/plugin/README.md" },
-  {
-    glob: "packages/omo-senpi/src/**/*.ts",
-    exclude: [/\.test\.ts$/, /^packages\/omo-senpi\/src\/components\/ultrawork\/generated-directive\.ts$/],
-  },
-  { glob: "packages/senpi-task/src/**/*.ts", exclude: [/\.test\.ts$/] },
   { glob: "packages/shared-skills/skills/{ulw-execute,refactor,review-work}/**", retiredNamesOnly: true },
 ]
 

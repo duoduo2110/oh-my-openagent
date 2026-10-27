@@ -27,7 +27,7 @@ describe("star-request", () => {
     expect(results).toEqual([{ repository: "code-yeongyu/oh-my-openagent", ok: true }])
   })
 
-  test("stars both repositories for codex platform (lazycodex is built on oh-my-openagent)", async () => {
+  test("stars the plugin repository", async () => {
     // given
     const starred: string[] = []
 
@@ -37,10 +37,9 @@ describe("star-request", () => {
     })
 
     // then
-    expect(starred).toEqual(["code-yeongyu/oh-my-openagent", "code-yeongyu/lazycodex"])
+    expect(starred).toEqual(["code-yeongyu/oh-my-openagent"])
     expect(results).toEqual([
       { repository: "code-yeongyu/oh-my-openagent", ok: true },
-      { repository: "code-yeongyu/lazycodex", ok: true },
     ])
   })
 
@@ -76,13 +75,12 @@ describe("star-request", () => {
     // given
     // when
     const results = await starGitHubRepositories("both", async (repository) => {
-      if (repository === "code-yeongyu/lazycodex") throw new Error("gh auth missing")
+      if (repository === "code-yeongyu/oh-my-openagent") throw new Error("gh auth missing")
     })
 
     // then
     expect(results).toEqual([
       { repository: "code-yeongyu/oh-my-openagent", ok: true },
-      { repository: "code-yeongyu/lazycodex", ok: false, error: "gh auth missing" },
     ])
   })
 })

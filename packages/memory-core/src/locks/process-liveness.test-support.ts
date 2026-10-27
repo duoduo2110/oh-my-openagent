@@ -2,7 +2,7 @@
 // probes, pid-file readers for foreign (non-child) writers, bounded child-termination waits, and
 // identity-guarded fail-safe kills so a failed assertion can never leak a spawned process.
 //
-// Ported from omo-senpi's process-liveness.test-support: memory-core cannot import from omo-senpi
+// Ported from the retired engine's process-liveness test support: memory-core cannot import it
 // (dependency direction), so the primitives the lock tests need live here.
 
 import { execFileSync } from "node:child_process"

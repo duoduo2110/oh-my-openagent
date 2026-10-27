@@ -22,9 +22,8 @@ Publishing is complete only after all release surfaces are verified:
 |---|---|---|
 | `omo pure components` | Core/MCP/shared-skill changes inside the published package payload | Release notes call out layer-specific version impact (from the workflow changelog, or `/get-unpublished-changes` when the user requested it). |
 | `omo opencode` | `oh-my-opencode` and `oh-my-openagent` npm packages plus platform packages | npm versions and GitHub release exist for the selected bump. |
-| `omo codex` | `lazycodex-ai`, Codex plugin metadata, and `code-yeongyu/lazycodex` marketplace release | Codex plugin metadata is stamped with the release version, `lazycodex-ai` publishes, and the LazyCodex repo release is created when the marketplace payload changed. |
 
-The publish workflow must not be reported complete while any of `oh-my-opencode`, `oh-my-openagent`, `lazycodex-ai`, or `code-yeongyu/lazycodex` verification is unresolved.
+The publish workflow must not be reported complete while either `oh-my-opencode` or `oh-my-openagent` verification is unresolved.
 
 ## CRITICAL: FULL WORKFLOW MEANS DISCORD TOO
 
@@ -46,7 +45,7 @@ After Step 3 (trigger), you MUST drive the run to a terminal conclusion AND comp
 2. **Release exists** — Step 5: `gh release view v${NEW_VERSION}` resolves.
 3. **Enhanced summary applied** — Step 6 + Step 7: draft (mandatory for patch/minor/major) AND `gh release edit --notes-file` applied. "Patch is optional" is wrong; patch summaries are MANDATORY.
 4. **Discord announced** — Step 7.5: `agent-discordbot message send` attempted; either a message id is recorded OR a clear failure is reported to the user. A skipped Discord step is a workflow failure.
-5. **npm verified** — Step 8: `npm view oh-my-opencode version` (and oh-my-openagent, lazycodex-ai) shows `${NEW_VERSION}`.
+5. **npm verified** — Step 8: `npm view oh-my-opencode version` (and oh-my-openagent) shows `${NEW_VERSION}`.
 
 Only after all five are green may you end the turn. If the run fails, run `gh run view <id> --log-failed`, report it, and STOP (do not repair the tree mid-publish). If a post-trigger step fails for an external reason (npm propagation, Discord auth), report it clearly and continue the remaining steps — do not let one failure abort the rest.
 
@@ -83,7 +82,6 @@ Reject any other value. Do not infer or repair malformed versions.
   { "id": "apply-summary", "content": "Prepend enhanced summary to release", "status": "pending", "priority": "high" },
   { "id": "discord-announce", "content": "MANDATORY: post release announcement to Discord channel immediately after release notes are finalized", "status": "pending", "priority": "high" },
   { "id": "verify-npm", "content": "Verify npm package published successfully", "status": "pending", "priority": "high" },
-  { "id": "verify-lazycodex", "content": "Verify lazycodex-ai publish, Codex plugin metadata version stamp, and code-yeongyu/lazycodex release/sync", "status": "pending", "priority": "high" },
   { "id": "verify-platform-binaries", "content": "Spot-check platform binary packages on npm", "status": "pending", "priority": "high" },
   { "id": "final-confirmation", "content": "Final confirmation to user with links", "status": "pending", "priority": "low" }
 ]
@@ -174,7 +172,7 @@ The publish run is a single workflow with sequential stages. Expected timeline (
 | `test` / `typecheck` / `codex-compatibility` (3 OS) | Re-runs the CI gates on the release source | 4–8 min (Windows is the long pole) |
 | `prepare-release-state` | Stamps versions, opens + auto-merges the `release: vX.Y.Z` PR, waits for that PR's required CI checks | 10–15 min (dominant stage) |
 | `publish-platform` (build + publish, 12 targets) | Builds and publishes both platform package families | 3–4 min |
-| `publish-main` → `release` | Publishes `oh-my-opencode` / `oh-my-openagent` / `lazycodex-ai`, creates the GitHub release, syncs `code-yeongyu/lazycodex` | 4–6 min |
+| `publish-main` → `release` | Publishes `oh-my-opencode` / `oh-my-openagent` and creates the GitHub release | 4–6 min |
 
 Poll job-level status every 30 seconds and report stage transitions to the user:
 ```bash
@@ -246,7 +244,6 @@ After running the preview, present the output to the user and say:
 
 ### LAST RELEASE BEFORE THE OMO NATIVE CLI PUBLIC RELEASE
 
-When the user identifies this as the final release before the OmO Native CLI public release, the GitHub summary MUST begin with this dedicated heading and the Discord announcement MUST repeat it as a dedicated heading immediately after `@here`:
 
 `## LAST RELEASE BEFORE THE OMO NATIVE CLI PUBLIC RELEASE`
 
@@ -260,7 +257,7 @@ You are writing the **headline layer** — a product announcement that sits ABOV
 - ALWAYS focus on USER IMPACT: what can users DO now that they couldn't before?
 - ALWAYS group by THEME or CAPABILITY, not by commit type (feat/fix/refactor).
 - ALWAYS use concrete language: "You can now do X" not "Added X feature".
-- NEVER include internal adapter changes matching `senpi`, `omo-senpi`, `senpi-task`, `pi-goal`, or `pi-webfetch` in either release-note variant.
+- NEVER include internal-only changes in either release-note variant.
 </rules>
 
 <examples>

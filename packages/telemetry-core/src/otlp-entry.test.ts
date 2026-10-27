@@ -34,7 +34,7 @@ async function loadedModules(env: Record<string, string>, consent: boolean | "th
   ].join("\n"))
   writeFileSync(join(root, "probe.ts"), [
     `const { ${via.fn}: start } = await import(${JSON.stringify(via.path)})`,
-    `const transport = await start({ productEnvPrefix: "OMO_TEST", ingestKey: "k", spoolDir: ${JSON.stringify(join(root, "spool"))}, spoolRoot: ${JSON.stringify(root)}, resource: {}, scope: { name: "omo-senpi", version: "1" }, project: () => ({}), spans: {}, env: ${JSON.stringify(env)}, consent: () => ${consent === "throws" ? '{ throw new Error("consent store unreadable") }' : consent}, autoStart: false })`,
+    `const transport = await start({ productEnvPrefix: "OMO_TEST", ingestKey: "k", spoolDir: ${JSON.stringify(join(root, "spool"))}, spoolRoot: ${JSON.stringify(root)}, resource: {}, scope: { name: "omo-opencode", version: "1" }, project: () => ({}), spans: {}, env: ${JSON.stringify(env)}, consent: () => ${consent === "throws" ? '{ throw new Error("consent store unreadable") }' : consent}, autoStart: false })`,
     'console.log(transport === null ? "RESULT null" : "RESULT transport")',
     "await transport?.shutdown()",
   ].join("\n"))

@@ -9,7 +9,7 @@ import * as z from "zod"
 // queue starts - they never refuse one.
 const DEFAULT_RESIDENCY_MAX_CHILDREN = "unlimited" as const
 
-// 0 is the numeric spelling of "unlimited" for every cap below: the senpi-task engine maps a 0
+// 0 is the numeric spelling of "unlimited" for every cap below: the task engine maps a 0
 // concurrency limit to Infinity and treats a 0 residency cap exactly like the "unlimited" literal.
 const ResidencyMaxChildrenInputSchema = z.union([z.number().int().nonnegative(), z.literal("unlimited")])
 
@@ -53,7 +53,7 @@ export const OmoTaskIsolationLayerSchema = z.object({
 }).strict()
 
 // Bounds for the dag orchestration subsystem. The whole block is optional, but once present every
-// key falls back to the engine default in senpi-task's DAG_SETTINGS_DEFAULTS.
+// key falls back to the engine default in the task engine's DAG_SETTINGS_DEFAULTS.
 export const OmoTaskDagSettingsSchema = z.object({
   max_nodes_per_run: z.number().int().positive().default(64),
   max_runs_per_session: z.number().int().positive().default(16),

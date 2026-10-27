@@ -20,8 +20,6 @@ const surfaces = [
 		workflowPath: join(repoRoot, "packages", "shared-skills", "skills", "ulw-plan", "references", "full-workflow.md"),
 	},
 	{
-		name: "omo-senpi",
-		workflowPath: join(repoRoot, "packages", "omo-senpi", "skills", "ulw-plan", "references", "full-workflow.md"),
 	},
 	{
 		name: "Codex component",

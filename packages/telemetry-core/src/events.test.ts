@@ -13,16 +13,16 @@ import type {
 } from "./index"
 
 const PRODUCT = {
-  cacheDirName: "omo-native",
+  cacheDirName: "omo-opencode",
   defaultApiKey: "default-key",
   defaultHost: "https://posthog.test",
   eventName: "legacy_event",
-  machineIdPrefix: "omo-native:",
-  packageName: "@oh-my-opencode/omo-native",
+  machineIdPrefix: "omo-opencode:",
+  packageName: "@oh-my-opencode/omo-opencode",
   packageVersion: "5.0.0",
-  platform: "omo-senpi",
-  productEnvPrefix: "OMO_SENPI",
-  productName: "omo-native",
+  platform: "opencode",
+  productEnvPrefix: "OMO_OPENCODE",
+  productName: "omo-opencode",
 } satisfies TelemetryProductConfig
 
 const ALLOWLIST = {
@@ -226,8 +226,8 @@ describe("event telemetry client", () => {
         count: 3,
         label: "x".repeat(64),
         package_version: "5.0.0",
-        platform: "omo-senpi",
-        product_name: "omo-native",
+        platform: "opencode",
+        product_name: "omo-opencode",
         schema_version: 1,
       },
     }])
@@ -280,8 +280,8 @@ describe("event telemetry client", () => {
     // then: attribution rides along; fixed identity keys cannot be overridden by the product
     expect(recorder.messages[0]?.properties).toMatchObject({
       install_id: "a".repeat(64),
-      platform: "omo-senpi",
-      product_name: "omo-native",
+      platform: "opencode",
+      product_name: "omo-opencode",
       schema_version: 3,
       surface: "desktop",
     })
@@ -338,8 +338,8 @@ describe("event telemetry client", () => {
       $process_person_profile: false,
       $session_id: "session-hash",
       package_version: "5.0.0",
-      platform: "omo-senpi",
-      product_name: "omo-native",
+      platform: "opencode",
+      product_name: "omo-opencode",
       reason: "startup",
       schema_version: 2,
     })
@@ -462,8 +462,8 @@ describe("event telemetry client", () => {
       event_id: expect.stringMatching(UUID_V7),
       $process_person_profile: false,
       package_version: "5.0.0",
-      platform: "omo-senpi",
-      product_name: "omo-native",
+      platform: "opencode",
+      product_name: "omo-opencode",
       schema_version: 1,
     })
     expect(diagnostics).toHaveLength(5)

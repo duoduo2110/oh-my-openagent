@@ -58,7 +58,7 @@ describe("wait-registry-versions", () => {
   })
 
   test("#given a scoped spec #when parsed #then the scope stays in the name", () => {
-    expect(parseSpec("@code-yeongyu/senpi@2026.10.19")).toEqual({ name: "@code-yeongyu/senpi", version: "2026.10.19" })
+    expect(parseSpec("@opencode-ai/plugin@1.18.31")).toEqual({ name: "@opencode-ai/plugin", version: "1.18.31" })
   })
 })
 

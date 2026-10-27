@@ -1,6 +1,6 @@
 /**
  * Single source of truth for which files inside a skill source tree are copied into a
- * harness plugin. Both omo-codex and omo-senpi sync-skills scripts consume this.
+ * harness plugin. The plugin skill sync consumes this.
  *
  * Segments are tested RELATIVE to the copy root. The ignore list targets the skill tree's
  * own cache directories; it must never react to where the repository happens to be checked

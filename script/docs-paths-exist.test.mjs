@@ -21,7 +21,7 @@ describe("computer-use documentation paths", () => {
   }
 
   test("rejects a missing cited path while retaining a real crate", () => {
-    const cited = citedPaths("see `packages/desktop-nope/x.ts` and `crates/senpi-desktop-engine`")
+    const cited = citedPaths("see `packages/missing-pkg/x.ts` and `script/missing-file.ts`")
     expect(cited.filter((path) => !existsSync(join(repoRoot, path)))).toEqual(["packages/desktop-nope/x.ts"])
   })
 })

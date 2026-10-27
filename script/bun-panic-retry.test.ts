@@ -9,7 +9,7 @@ const runner = fileURLToPath(new URL("./bun-panic-retry.ts", import.meta.url))
 const PANIC_OUTPUT = [
   "panic(main thread): Segmentation fault at address 0x1",
   "oh no: Bun has crashed. This indicates a bug in Bun, not your code.",
-  "✗ packages\\senpi-task\\src\\runners\\rpc-host\\liveness.test.ts (worker crashed: exit code 3)",
+  "✗ packages\\memory-core\\src\\locks\\process-liveness.test.ts (worker crashed: exit code 3)",
 ].join("\n")
 const FAILING_TEST = "(fail) launch spec > #given a spec #when read #then it parses [1.20ms]"
 

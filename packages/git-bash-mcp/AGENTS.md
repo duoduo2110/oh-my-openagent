@@ -24,7 +24,6 @@ Internal **Bun-targeted** MCP-layer package (`@oh-my-opencode/git-bash-mcp`, pri
 ## NOTES
 
 - **Bun-targeted (NOT npm+vitest like `lsp-tools-mcp`/`lsp-daemon`).** Build: `bun build src/cli.ts --outdir dist --target node --format esm` (root: `bun run build:git-bash-mcp`). Tests via `bun:test`. No biome, no `engines.node`.
-- **Codex-only consumption:** `omo-codex/plugin/.mcp.json` declares it; `script/sync-lazycodex-marketplace.ts` copies `dist/` → `<plugin>/components/git-bash-mcp/dist/` and rewrites the `.mcp.json` path. Root `files` ships `packages/git-bash-mcp/dist`.
 - **Temp-fd output capture** (`mkdtempSync` + `openSync` + `rmSync`) avoids Windows pipe-buffer deadlocks.
 - **Timeout env chain:** `OMO_CODEX_GIT_BASH_TIMEOUT_MS` → `OMO_CODEX_EXEC_COMMAND_TIMEOUT_MS` → `CODEX_EXEC_COMMAND_TIMEOUT_MS` → `EXEC_COMMAND_TIMEOUT_MS` → 120_000 default (max 30 min).
 - Parent: [`packages/AGENTS.md`](../AGENTS.md).

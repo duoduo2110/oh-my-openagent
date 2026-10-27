@@ -59,12 +59,10 @@ ulw-research/
 - The CLI never launches a browser. The layout probe is printed as one async expression; the orchestrator evaluates it through the browser skill's owned headless engine and passes the result back with `check --layout`.
 - Time is always injected (`--now`, `startedAt`); no module reads the clock inside a decision.
 - Tests are co-located given/when/then bun tests; CLI tests spawn `node` with bun removed from `PATH`. Fixtures live only under `scripts/tests/fixtures/`, are depersonalized, and never ship.
-- The senpi source dir (`packages/omo-senpi/skills/ulw-research/`) intentionally has no `scripts/`, `references/report-gates.md`, `references/deliverable-phase.md`, `references/report-visualization.md`, `references/fact-ledger-grammar.md`, `references/fidelity-claim-kinds.md`, `references/unit-rules.md`, or `references/fact-ledger.md`: the senpi sync overlays them from here byte-for-byte (`sharedAssets` in `packages/omo-senpi/plugin/scripts/native-skill-sources.mjs`), and both editions' sync suites assert the shipped copies equal these sources.
 - References and scripts carry no Hangul (Korean match strings are `\u` escapes) and never three consecutive newlines (the senpi sync normalizes those and would break byte equality).
 
 ## ANTI-PATTERNS
 
-- NEVER hand-edit a shipped copy under `packages/omo-senpi/plugin/skills/` or the packaged plugin tree; edit here and re-sync.
 - NEVER add a severity override or a caller-supplied severity. The only sanctioned exception is `unsourced_number` following the design spec's `Lineage:` mode.
 - Never let a gate or the repair loop silently skip: an unrunnable gate is recorded `not_run`, and an integrity code blocks delivery.
 - Never name a browser library in the references or `SKILL.md`; route through the browser skill.
@@ -76,7 +74,6 @@ ulw-research/
 # from the repository root
 bun test --timeout 20000 packages/shared-skills/skills/ulw-research/scripts
 node packages/shared-skills/skills/ulw-research/scripts/report-tools.mjs --help --json
-node packages/omo-senpi/plugin/scripts/sync-skills.mjs && bun test packages/omo-senpi/src/skills-sync.test.ts
 ```
 
 - Parent: [`packages/shared-skills/AGENTS.md`](../../AGENTS.md).

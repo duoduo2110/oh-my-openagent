@@ -114,7 +114,7 @@ describe("dependencies check", () => {
     })
 
     it("#given a zero-dependency install where require.resolve throws Bun's ResolveMessage #when resolving package binary #then returns null instead of crashing", () => {
-      //#given a real ResolveMessage captured from a genuinely failing require.resolve (lazycodex-ai ships no node_modules)
+      //#given a real ResolveMessage captured from a genuinely failing require.resolve (the published CLI ships no node_modules)
       const requireFromHere = createRequire(import.meta.url)
       let resolveMessage: unknown
       try {

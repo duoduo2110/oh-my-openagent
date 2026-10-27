@@ -12,7 +12,6 @@ const postinstallPath = fileURLToPath(new URL("./postinstall.mjs", import.meta.u
 const RENAME_NOTICE =
   "oh-my-openagent: the 'omo' command is now 'omo-agent-toolkit' (the old name was removed in this major release)."
 const PACKAGE_VERSION: string = JSON.parse(readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8")).version
-const NATIVE_NOTICE = `oh-my-openagent: OmO Native is the same omo as one 'omo' command, with no OpenCode host: bun add -g ${PACKAGE_VERSION.includes("-") ? "omo-ai@beta" : "omo-ai"}`
 const SUBPROCESS_TEST_TIMEOUT_MS = 30_000
 const HANGING_OPENCODE_MS = 60_000
 
@@ -65,17 +64,7 @@ function countNoticeLines(output: string): number {
   return output.split("\n").filter((line) => line.trim() === RENAME_NOTICE).length
 }
 
-function countNativeNotices(output: string): number {
-  return output.split("\n").filter((line) => line.trim() === NATIVE_NOTICE).length
-}
-
 describe("postinstall rename notice", () => {
-  test("names the install line of the package's own channel", async () => {
-    const { nativeNotice } = await import("./postinstall.mjs")
-    expect(nativeNotice("5.0.0")).toEndWith("bun add -g omo-ai")
-    expect(nativeNotice("5.0.0-beta.90")).toEndWith("bun add -g omo-ai@beta")
-  })
-
   test("announces the omo-agent-toolkit rename exactly once", () => {
     // #given
     // a fixture environment isolated from the real HOME and OpenCode plugin cache
@@ -85,7 +74,6 @@ describe("postinstall rename notice", () => {
 
     // #then
     expect(countNoticeLines(run.stdout)).toBe(1)
-    expect(countNativeNotices(run.stdout)).toBe(1)
   }, SUBPROCESS_TEST_TIMEOUT_MS)
 
   test("never fails the install regardless of platform binary resolution", () => {

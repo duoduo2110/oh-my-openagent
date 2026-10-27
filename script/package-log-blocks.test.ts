@@ -5,8 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { blockFromPrepend, compileBlocks, markerLine, prependToLog, splitFragment } from "./package-log-blocks.ts"
 
-const LOG = "packages/omo-senpi/changes.md"
-const OTHER = "packages/senpi-task/changes.md"
+const LOG = "packages/memory-core/changes.md"
+const OTHER = "packages/team-core/changes.md"
 const fragment = (preamble: string, ...blocks: [string, string][]) =>
   [preamble, ...blocks.map(([log, body]) => `${markerLine(log)}\n${body}`)].filter(Boolean).join("\n\n")
 
@@ -36,7 +36,7 @@ describe("splitFragment", () => {
 
 describe("compileBlocks", () => {
   test("writes blocks newest PR first on top of each log and keeps only the preamble", () => {
-    const logs: Record<string, string> = { [LOG]: "# omo-senpi changes\n\n## 2026-10-01 - old\n" }
+    const logs: Record<string, string> = { [LOG]: "# memory-core changes\n\n## 2026-10-01 - old\n" }
     const result = compileBlocks(
       [
         { pr: 10, content: fragment("**ten**", [LOG, "## 2026-10-20 - ten (#10)"]) },
@@ -44,7 +44,7 @@ describe("compileBlocks", () => {
       ],
       (path) => logs[path] ?? null,
     )
-    expect(result.logs.get(LOG)).toBe("# omo-senpi changes\n\n## 2026-10-20 - twelve (#12)\n\n## 2026-10-20 - ten (#10)\n\n## 2026-10-01 - old\n")
+    expect(result.logs.get(LOG)).toBe("# memory-core changes\n\n## 2026-10-20 - twelve (#12)\n\n## 2026-10-20 - ten (#10)\n\n## 2026-10-01 - old\n")
     expect(result.fragments.get(10)).toBe("**ten**\n")
     expect(result.fragments.get(12)).toBeNull()
   })
@@ -72,8 +72,8 @@ describe("two open PRs writing to the same package log", () => {
   const repo = () => {
     const dir = mkdtempSync(join(tmpdir(), "package-log-blocks-"))
     git(dir, "init", "-q", "-b", "dev")
-    mkdirSync(join(dir, "packages/omo-senpi"), { recursive: true })
-    writeFileSync(join(dir, LOG), "# omo-senpi changes\n\n## 2026-10-01 - old\n")
+    mkdirSync(join(dir, "packages/memory-core"), { recursive: true })
+    writeFileSync(join(dir, LOG), "# memory-core changes\n\n## 2026-10-01 - old\n")
     git(dir, "add", "-A")
     git(dir, "commit", "-q", "-m", "base")
     return dir
@@ -99,8 +99,8 @@ describe("two open PRs writing to the same package log", () => {
   test("RED: prepending to the log directly makes the second merge conflict", () => {
     const dir = repo()
     try {
-      branch(dir, "a", LOG, "# omo-senpi changes\n\n## 2026-10-20 - a (#1)\n\n## 2026-10-01 - old\n")
-      branch(dir, "b", LOG, "# omo-senpi changes\n\n## 2026-10-20 - b (#2)\n\n## 2026-10-01 - old\n")
+      branch(dir, "a", LOG, "# memory-core changes\n\n## 2026-10-20 - a (#1)\n\n## 2026-10-01 - old\n")
+      branch(dir, "b", LOG, "# memory-core changes\n\n## 2026-10-20 - b (#2)\n\n## 2026-10-01 - old\n")
       expect(mergeBoth(dir)).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -115,7 +115,7 @@ describe("two open PRs writing to the same package log", () => {
       expect(mergeBoth(dir)).toBe(true)
       const read = (path: string) => git(dir, "show", `dev:${path}`)
       const result = compileBlocks([1, 2].map((pr) => ({ pr, content: read(`changes/unreleased/${pr}.md`) })), read)
-      expect(result.logs.get(LOG)).toBe("# omo-senpi changes\n\n## 2026-10-20 - b (#2)\n\n## 2026-10-20 - a (#1)\n\n## 2026-10-01 - old\n")
+      expect(result.logs.get(LOG)).toBe("# memory-core changes\n\n## 2026-10-20 - b (#2)\n\n## 2026-10-20 - a (#1)\n\n## 2026-10-01 - old\n")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

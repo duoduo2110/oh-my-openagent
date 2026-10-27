@@ -60,13 +60,12 @@ describe("tracked evidence paths audit", () => {
     // given
     const paths = [
       ".omo/evidence/20260922-run/red.txt",
-      "packages/omo-senpi/.omo/evidence/x.txt",
+      "packages/memory-core/.omo/evidence/x.txt",
       ".qa-evidence/omo-row-RED.txt",
-      "packages/senpi-task/.qa-evidence/GREEN.txt",
+      "packages/team-core/.qa-evidence/GREEN.txt",
       "local-ignore/qa-evidence/20260819-senpi/log.txt",
       ".omo/rules/test-discipline.md",
       ".omo/fixtures/releases.json",
-      "packages/omo-codex/plugin/components/lazycodex-executor-verify/test/codex-hook.test.ts",
       "script/qa/web-terminal-visual-qa.mjs",
     ]
 
@@ -78,8 +77,8 @@ describe("tracked evidence paths audit", () => {
       ".omo/evidence/20260922-run/red.txt",
       ".qa-evidence/omo-row-RED.txt",
       "local-ignore/qa-evidence/20260819-senpi/log.txt",
-      "packages/omo-senpi/.omo/evidence/x.txt",
-      "packages/senpi-task/.qa-evidence/GREEN.txt",
+      "packages/memory-core/.omo/evidence/x.txt",
+      "packages/team-core/.qa-evidence/GREEN.txt",
     ])
   })
 })

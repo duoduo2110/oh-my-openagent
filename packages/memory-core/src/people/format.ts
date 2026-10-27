@@ -1,7 +1,7 @@
 /**
  * People card + observation format (IC-14, IC-16).
  *
- * Config-free: the omo-senpi side passes `memory.people.*` limits in.
+ * Config-free: the caller passes `memory.people.*` limits in.
  * Violations return diagnostics in the parse result; they never throw.
  *
  * Card lines use four prefixes: IDENTITY, ATTRIBUTE, RELATIONSHIP, INSTRUCTION.

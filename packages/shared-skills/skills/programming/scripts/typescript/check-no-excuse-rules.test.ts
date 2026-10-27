@@ -5,7 +5,7 @@ import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
-// Regression for lazycodex#111: the script must resolve `typescript` from the
+// Regression #111: the script must resolve `typescript` from the
 // caller project (cwd), not from the script's own location, so it works when
 // executed from an installed `~/.codex/...` skill cache.
 

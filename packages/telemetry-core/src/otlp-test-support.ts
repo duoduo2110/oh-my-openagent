@@ -19,7 +19,7 @@ import {
 } from "./otlp-proto/opentelemetry/proto/collector/trace/v1/trace_service_pb.js"
 import type { AnyValue, KeyValue } from "./otlp-proto/opentelemetry/proto/common/v1/common_pb.js"
 
-export const TEST_SCOPE = { name: "omo-senpi", version: "3.17.0" } as const
+export const TEST_SCOPE = { name: "oh-my-openagent", version: "3.17.0" } as const
 
 /** Test stand-in for a schema artifact's span allowlist. */
 export const TEST_SPANS = { "omo.turn": ["gen_ai.request.model", "n", "nan"] } as const
@@ -43,7 +43,7 @@ export const testWireProjection: OtlpWireProjection = (_event, properties) => {
 
 export function testResource(version = "1.1.0"): Readonly<Record<string, string | number | boolean>> {
   return {
-    "service.name": "omo-senpi",
+    "service.name": "oh-my-openagent",
     "service.version": version,
     "service.instance.id": "0123456789abcdef0123456789abcdef",
     "omo.install.hash": "ab".repeat(32),

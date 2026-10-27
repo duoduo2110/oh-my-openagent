@@ -21,7 +21,6 @@ Every phase classifies evidence and risk across:
 |---|---|---|
 | `omo pure components` | Core packages, MCP packages, shared skills, reusable scripts, platform binary inputs | Patch/minor/major impact for shared logic consumed by adapters. |
 | `omo opencode` | Root `oh-my-opencode` / `oh-my-openagent`, `src/`, OpenCode plugin hooks/tools/CLI/config/docs, `.opencode/`, `.agents/` | Semver bump for the OpenCode/OpenAgent npm release. |
-| `omo codex` | `packages/omo-codex`, `lazycodex-ai`, Codex plugin metadata/hooks, bundled MCP runtimes, `code-yeongyu/lazycodex` marketplace payload | Codex adapter bump, LazyCodex npm publish risk, and marketplace/GitHub release need. |
 
 ---
 

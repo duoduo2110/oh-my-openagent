@@ -1,5 +1,5 @@
 // Soul-file identity shared by the write tools, the notice watermark, and the
-// omo-senpi notice wiring. A "soul edit" is any committed change touching
+// Notice wiring. A "soul edit" is any committed change touching
 // system/persona.md or system/identity.md (plan IC-5 / todo 7), or
 // system/boundaries.md: the user-owned block must never change silently.
 

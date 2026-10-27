@@ -40,6 +40,6 @@
     "test": "bun test src/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
-    "@oh-my-opencode/mcp-stdio-core": "workspace:*"
+    "@oh-my-opencode/mcp-stdio-core": "file:../mcp-stdio-core"
   }
 }

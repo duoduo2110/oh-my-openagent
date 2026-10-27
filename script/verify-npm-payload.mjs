@@ -3,22 +3,20 @@
 import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 
-import { findMissingPayloadPaths, requiredCodexInstallPaths } from "./npm-payload-required-paths.mjs"
+import { findMissingPayloadPaths, requiredPayloadPaths } from "./npm-payload-required-paths.mjs"
 import { npmSpawnOptions } from "./npm-invocation.mjs"
 import { parseNpmPackPaths } from "./npm-pack-paths.mjs"
 
 const FORBIDDEN_RULES = [
   { name: "nested node_modules", matches: (path) => path.includes("node_modules/") },
-  { name: "senpi payload", matches: (path) => path.startsWith("packages/omo-senpi/") },
   { name: "retired workflow-selector component", matches: (path) => path.includes("components/workflow-selector/") },
 ]
 
 const MAX_REPORTED_OFFENDERS = 50
 
-// The omo-codex plugin's install-time scripts import @oh-my-opencode/shared-skills subpaths, and
-// the lazycodex-ai publish step curates its own `files` list in the workflow. Every export target
-// of the shared-skills package must therefore be in the payload, or a registry install dies at
-// `npm run sync:skills` (lazycodex-ai@5.0.0-beta.43 shipped without skill-source-filter.mjs).
+// The plugin's install-time scripts import @oh-my-opencode/shared-skills subpaths. Every export
+// target of the shared-skills package must therefore be in the payload, or a registry install
+// dies at `npm run sync:skills`.
 function requiredSharedSkillsPaths() {
   const manifest = JSON.parse(readFileSync("packages/shared-skills/package.json", "utf8"))
   // Runtime targets only: a missing .d.ts cannot break an install, a missing .mjs does.
@@ -46,7 +44,7 @@ const offenders = paths.flatMap((path) => {
 
 const missing = [
   ...findMissingPayloadPaths(paths, requiredSharedSkillsPaths()),
-  ...findMissingPayloadPaths(paths, requiredCodexInstallPaths()),
+  ...findMissingPayloadPaths(paths, requiredPayloadPaths()),
 ]
 if (missing.length > 0) {
   console.error(`npm payload is missing runtime paths the Codex plugin install reads (${missing.length}):`)

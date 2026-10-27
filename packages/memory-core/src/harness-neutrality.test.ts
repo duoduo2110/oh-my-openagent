@@ -4,11 +4,8 @@ import { join } from "node:path"
 
 const PACKAGE_ROOT = join(import.meta.dir, "..")
 const FORBIDDEN_IMPORT_PATTERNS = [
-  "@code-yeongyu/senpi",
   "@earendil-works/",
   "@mariozechner/pi-",
-  "@oh-my-opencode/omo-senpi",
-  "@oh-my-opencode/senpi-task",
 ]
 
 function collectSourceFiles(dir: string): string[] {
@@ -26,7 +23,7 @@ function collectSourceFiles(dir: string): string[] {
 }
 
 describe("memory-core harness neutrality", () => {
-  it("#given the package manifest #when dependencies are inspected #then no senpi or pi packages appear", () => {
+  it("#given the package manifest #when dependencies are inspected #then no pi packages appear", () => {
     // given
     const manifest = JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8")) as Record<string, unknown>
     // when

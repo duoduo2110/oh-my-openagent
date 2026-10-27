@@ -72,7 +72,6 @@ Snapshot date: 2026-08-31. Total shim exports found: 241.
 | `packages/omo-opencode/src/cli/install-codex/git-bash.ts` | `@oh-my-opencode/omo-codex` |
 | `packages/omo-opencode/src/cli/install-codex/index.ts` | `@oh-my-opencode/omo-codex` |
 | `packages/omo-opencode/src/cli/install-codex/install-codex.ts` | `@oh-my-opencode/omo-codex` |
-| `packages/omo-opencode/src/cli/install-codex/lazycodex-version-stamp.ts` | `@oh-my-opencode/omo-codex` |
 | `packages/omo-opencode/src/cli/install-codex/link-cached-plugin-agents.ts` | `@oh-my-opencode/omo-codex` |
 | `packages/omo-opencode/src/cli/install-codex/lsp-daemon-reaper.ts` | `@oh-my-opencode/omo-codex` |
 | `packages/omo-opencode/src/cli/install-codex/toml-section-editor.ts` | `@oh-my-opencode/omo-codex` |

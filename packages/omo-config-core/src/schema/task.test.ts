@@ -387,7 +387,7 @@ describe("OmoTaskSettingsLayerSchema dag block", () => {
   })
 })
 
-// The shared-daemon knobs (plan senpi-task-daemon-host-runner-v2, todo 34). `process_runner`
+// The shared-daemon knobs (plan task-daemon-host-runner-v2, todo 34). `process_runner`
 // selects the host-session runner over the per-child one, `host_engine_policy` says how an engine
 // difference on the running daemon is resolved, and `default_execution_mode: "auto"` defers the
 // in-process/process choice to the daemon capability check made once per parent session.

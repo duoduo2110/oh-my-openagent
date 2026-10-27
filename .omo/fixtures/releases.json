@@ -11,7 +11,7 @@
       "tagName": "v5.0.0-beta.4",
       "publishedAt": "2026-08-10T13:04:32Z",
       "isPrerelease": true,
-      "body": "## Added\n\n- OmO Native footer badge in Senpi plugin\n- Agent home resolver for branded layouts\n\n## Fixed\n\n- Memory surface direct registration\n\n<!-- omo-backfill-marker: v5.0.0-beta.4 -->"
+      "body": "## Added\n\n- Plugin footer badge\n- Agent home resolver for branded layouts\n\n## Fixed\n\n- Memory surface direct registration\n\n<!-- omo-backfill-marker: v5.0.0-beta.4 -->"
     },
     {
       "tagName": "v5.0.0-beta.5",
@@ -125,7 +125,7 @@
       "tagName": "v5.0.0-beta.23",
       "publishedAt": "2026-08-28T09:15:17Z",
       "isPrerelease": true,
-      "body": "## Added\n\n- OmO Native eval workflow documentation\n\n## Changed\n\n- Eval telemetry separation and correlation\n\n<!-- omo-backfill-marker: v5.0.0-beta.23 -->"
+      "body": "## Added\n\n- Eval workflow documentation\n\n## Changed\n\n- Eval telemetry separation and correlation\n\n<!-- omo-backfill-marker: v5.0.0-beta.23 -->"
     },
     {
       "tagName": "v5.0.0-beta.24",
@@ -192,7 +192,7 @@
       "tagName": "v5.0.0-beta.34",
       "publishedAt": "2026-09-04T21:10:49Z",
       "isPrerelease": true,
-      "body": "## Changed\n\n- OmO Native bun runtime auto-detection\n\n<!-- omo-backfill-marker: v5.0.0-beta.34 -->"
+      "body": "## Changed\n\n- Bun runtime auto-detection\n\n<!-- omo-backfill-marker: v5.0.0-beta.34 -->"
     },
     {
       "tagName": "v5.0.0-beta.35",

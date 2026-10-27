@@ -34,7 +34,7 @@ Registered by `getCodexCheckDefinitions()` (3): **CODEX** (critical, `checks/cod
 
 `checks/legacy-config-leftovers.ts` is not registered standalone; the Config aggregator invokes it.
 
-`checks/latest-version.ts` is not a check either: `runner.ts` runs `gatherEditionDistTags(target)` in parallel with the checks (npm dist-tags for `oh-my-openagent` / `lazycodex-ai`, 5s fetch timeout, `null` when unreachable) and `resolveLatestVersion()` picks the tag matching the installed channel. The result lands in `DoctorResult.latestVersion`, which the default formatter prints on the OK summary line together with the edition label and the per-edition update command (`framework/constants.ts` `EDITION_LABELS` / `UPDATE_COMMANDS`; `null` renders as `could not check`).
+`checks/latest-version.ts` is not a check either: `runner.ts` runs `gatherEditionDistTags()` in parallel with the checks (npm dist-tags for `oh-my-openagent`, 5s fetch timeout, `null` when unreachable) and `resolveLatestVersion()` picks the tag matching the installed channel. The result lands in `DoctorResult.latestVersion`, which the default formatter prints on the OK summary line together with the update command (`framework/constants.ts` `UPDATE_COMMANDS`; `null` renders as `could not check`).
 
 ## SUPPORTING CHECK FILES (26 total)
 

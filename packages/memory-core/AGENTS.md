@@ -100,7 +100,6 @@ The public API is the barrel at `src/index.ts`.
 ## CONSUMERS
 
 Harness adapters provide identity, lifecycle events, tool registration, and
-sync orchestration; the Senpi adapter lives in `packages/omo-senpi/src/components/memory/`.
 Keep adapter-specific behavior there, never imported back into this package.
 
 ## QA

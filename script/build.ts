@@ -32,11 +32,8 @@ function killTree(child: ReturnType<typeof spawn>): void {
 }
 
 // Every node writes to a disjoint output path, so ordering only matters where one node
-// reads another's output. The three real edges: index -> node-require-shim (patches
-// dist/index.js), materialize -> skills-assets and materialize -> codex-plugin (both read
-// the materialized packages/shared-skills/skills). materialize is hoisted to run exactly
-// once up front; OMO_SKIP_MATERIALIZE=1 makes the downstream copies inside codex-plugin and
-// shared-skills-assets no-ops, avoiding a git submodule index.lock and torn writes.
+// reads another's output: index -> node-require-shim patches dist/index.js, and
+// index -> skills-assets copies packages/shared-skills/skills next to it.
 //
 // The graph itself, its dependency edges and the consumer profiles live in build-nodes.ts so
 // they can be inspected without running a build.
@@ -45,14 +42,8 @@ const nodes: BuildNode[] = selectBuildNodes(BUILD_NODES, process.env.OMO_BUILD_P
 async function run() {
 	const profile = process.env.OMO_BUILD_PROFILE;
 	if (profile) process.stdout.write(`build: profile ${profile} selected ${nodes.length} of ${BUILD_NODES.length} nodes\n`);
-	await materializeOnce();
-	const childEnv = { ...process.env, OMO_SKIP_MATERIALIZE: "1" };
-	await runGraph(nodes, childEnv);
+	await runGraph(nodes, process.env);
 	process.stdout.write("build: all steps completed\n");
-}
-
-async function materializeOnce() {
-	await runNode({ id: "materialize", command: "bun", args: ["run", "build:materialize-frontend"], deps: [] }, process.env);
 }
 
 async function runGraph(graph: BuildNode[], env: NodeJS.ProcessEnv) {

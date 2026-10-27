@@ -2,14 +2,14 @@ import { expect, test } from "bun:test"
 import { markerLine } from "./package-log-blocks.ts"
 import { checkPackageLogs, type PackageLogInput } from "./package-log-gate.ts"
 
-const LOG = "packages/omo-senpi/changes.md"
+const LOG = "packages/memory-core/changes.md"
 const input = (over: Partial<PackageLogInput>): PackageLogInput => ({
   addedFiles: [], modifiedFiles: [], deletedFiles: [], isRelease: false, fragment: null,
   existsAtHead: (path) => path === LOG, ...over,
 })
 
 test("a PR that edits a package log directly fails and is told where the entry goes", () => {
-  const result = checkPackageLogs(input({ modifiedFiles: ["packages/omo-senpi/src/a.ts", LOG] }))
+  const result = checkPackageLogs(input({ modifiedFiles: ["packages/memory-core/src/a.ts", LOG] }))
   expect(result.pass).toBe(false)
   expect(result.reason).toContain(LOG)
   expect(checkPackageLogs(input({ addedFiles: ["packages/new-pkg/changes.md"] })).pass).toBe(false)

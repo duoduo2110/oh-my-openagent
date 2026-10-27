@@ -106,7 +106,7 @@ describe("createTelemetryProviders", () => {
   test("#given Node attribution #when the Resource is built #then it uses the D-P keys, OTLP value spellings and the in-house SDK name", () => {
     // when
     const resource = createTelemetryResource({
-      serviceName: "omo-senpi",
+      serviceName: "omo-opencode",
       serviceVersion: "1.2.3",
       instanceId: "0123456789abcdef0123456789abcdef",
       installHash: "cd".repeat(32),
@@ -120,7 +120,7 @@ describe("createTelemetryProviders", () => {
 
     // then
     expect(resource).toEqual({
-      "service.name": "omo-senpi",
+      "service.name": "omo-opencode",
       "service.version": "1.2.3",
       "service.instance.id": "0123456789abcdef0123456789abcdef",
       "omo.install.hash": "cd".repeat(32),
@@ -146,7 +146,7 @@ describe("createTelemetryProviders", () => {
 
     // then
     expect(attributeMap(request.resourceLogs[0]?.resource?.attributes ?? [])["service.version"]).toBe("1.1.0")
-    expect(request.resourceLogs[0]?.scopeLogs[0]?.scope?.name).toBe("omo-senpi")
+    expect(request.resourceLogs[0]?.scopeLogs[0]?.scope?.name).toBe("omo-opencode")
     expect(attributeMap(logRecordsOf(request)[0]?.attributes ?? [])).toEqual({ "omo.a": 1 })
   })
 })

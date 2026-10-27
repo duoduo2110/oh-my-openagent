@@ -47,10 +47,10 @@ describe("no-em-dash-copy", () => {
     "packages/shared-skills/upstreams/copy.ts",
     "packages/lsp-daemon/src/proxy.ts",
     "packages/lsp-tools-mcp/src/index.ts",
-    "packages/omo-senpi/plugin/extensions/omo.js",
-    "packages/omo-senpi/plugin/runtime/agent-toolkit-sdk/sdk.js",
-    "packages/omo-senpi/src/components/ultrawork/generated-directive.ts",
-    "packages/omo-codex/plugin/components/ultrawork/src/directive-content.ts",
+    "packages/omo-opencode/plugin/extensions/omo.js",
+    "packages/omo-opencode/plugin/runtime/agent-toolkit-sdk/sdk.js",
+    "packages/memory-core/src/components/ultrawork/generated-directive.ts",
+    "packages/omo-opencode/plugin/components/ultrawork/src/directive-content.ts",
     "docs/copy.md",
     "script/copy.ts",
   ])("exempts %s", (filename) => {
@@ -64,7 +64,7 @@ describe("no-em-dash-copy", () => {
     "lib/copy.js",
     "workers/copy.mts",
     "bin/oh-my-opencode.js",
-    "packages/omo-native/bin/copy.js",
+    "packages/omo-opencode/bin/copy.js",
     "packages/omo-opencode/src/testing/create-plugin-module.ts",
     "packages/example/src/copy.ts",
     "packages/web/app/page.tsx",
@@ -74,8 +74,8 @@ describe("no-em-dash-copy", () => {
     "packages/shared-skills/skills/browser/scripts/browser-doctor.mjs",
     "packages/shared-skills/skills/browser/scripts/browser-install.mjs",
     "packages/shared-skills/skills/programming/scripts/typescript/check-no-excuse-rules.ts",
-    "packages/omo-codex/plugin/scripts/sync-skills.mjs",
-    "packages/omo-senpi/plugin/scripts/sync-skills.mjs",
+    "packages/omo-opencode/plugin/scripts/sync-skills.mjs",
+    "packages/memory-core/plugin/scripts/sync-skills.mjs",
   ])("checks %s", (filename) => {
     expect(isProductSource(filename)).toBe(true)
   })
@@ -102,7 +102,7 @@ describe("no-em-dash-copy", () => {
   })
 
   test("allows Senpi sync heading matcher data but checks other shipped copy", () => {
-    const path = "packages/omo-senpi/plugin/scripts/sync-skills.mjs"
+    const path = "packages/memory-core/plugin/scripts/sync-skills.mjs"
     const data = [
       'const before = "## ABSOLUTE RULE: YOU ARE AN ORCHESTRATOR \\u2014 NEVER THE IMPLEMENTER";',
       'const after = "## ABSOLUTE RULE (root session): YOU ARE AN ORCHESTRATOR \\u2014 NEVER THE IMPLEMENTER";',

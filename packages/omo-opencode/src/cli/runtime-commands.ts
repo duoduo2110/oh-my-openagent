@@ -1,7 +1,6 @@
 import { InvalidArgumentError, type Command } from "commander"
 
 import { boulder } from "./boulder"
-import { codexUlwLoop } from "./codex-ulw-loop"
 import { refreshModelCapabilities } from "./refresh-model-capabilities"
 import { worktreeSweep } from "./worktree-sweep"
 import { parseOlderThanDays } from "./worktree-sweep/options"
@@ -80,16 +79,6 @@ prunes.
         repos: options.repo,
         json: options.json ?? false,
       })
-      process.exit(exitCode)
-    })
-
-  program
-    .command("ulw-loop [args...]")
-    .allowUnknownOption()
-    .passThroughOptions()
-    .description("Run the Codex LazyCodex ulw-loop CLI")
-    .action(async (args: string[] = []) => {
-      const exitCode = await codexUlwLoop(args)
       process.exit(exitCode)
     })
 }

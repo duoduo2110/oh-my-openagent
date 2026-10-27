@@ -8,7 +8,7 @@ import { markerLine, splitFragment } from "./package-log-blocks.ts"
 // Each case spawns git and bun several times (about 4 s alone), so it gets a budget above bun's 5 s default.
 const SPAWN_TIMEOUT_MS = 30_000
 const SCRIPT_DIR = import.meta.dir
-const LOG = "packages/omo-senpi/changes.md"
+const LOG = "packages/memory-core/changes.md"
 const ENV = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: ENV })
@@ -23,9 +23,9 @@ const scratch = () => {
   // A runner's global core.autocrlf=true (windows-latest) would check files out with CRLF; the expectations are bytes.
   git(dir, "config", "core.autocrlf", "false")
   cpSync(SCRIPT_DIR, join(dir, "script"), { recursive: true, filter: (p) => !p.includes("node_modules") })
-  mkdirSync(join(dir, "packages/omo-senpi"), { recursive: true })
+  mkdirSync(join(dir, "packages/memory-core"), { recursive: true })
   mkdirSync(join(dir, "changes/unreleased"), { recursive: true })
-  writeFileSync(join(dir, LOG), "# omo-senpi changes\n\n## 2026-10-01 - old\n")
+  writeFileSync(join(dir, LOG), "# memory-core changes\n\n## 2026-10-01 - old\n")
   writeFileSync(join(dir, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-10-01\n\nold\n")
   commit(dir, "base")
   return dir
@@ -42,7 +42,7 @@ describe("the gate runner's release decision (#10682 review HIGH)", () => {
     const dir = scratch()
     try {
       git(dir, "checkout", "-q", "-b", "release/x")
-      writeFileSync(join(dir, LOG), "# omo-senpi changes\n\n## 2026-10-20 - direct\n\n## 2026-10-01 - old\n")
+      writeFileSync(join(dir, LOG), "# memory-core changes\n\n## 2026-10-20 - direct\n\n## 2026-10-01 - old\n")
       writeFileSync(join(dir, "changes/unreleased/7.md"), "**p** ([#7](u))\n")
       commit(dir, "direct edit")
       const result = gate(dir, "release/x", "random-user")
@@ -66,7 +66,7 @@ describe("stamp-release-changelog.ts with package-log blocks", () => {
       expect(changelog).toContain("**eight**")
       expect(changelog).not.toContain("changes-log")
       expect(changelog).not.toContain("nine (#9)")
-      expect(readFileSync(join(dir, LOG), "utf8")).toBe("# omo-senpi changes\n\n## 2026-10-20 - nine (#9)\n\n## 2026-10-20 - eight (#8)\n\n## 2026-10-01 - old\n")
+      expect(readFileSync(join(dir, LOG), "utf8")).toBe("# memory-core changes\n\n## 2026-10-20 - nine (#9)\n\n## 2026-10-20 - eight (#8)\n\n## 2026-10-01 - old\n")
       expect(git(dir, "status", "--porcelain", "changes/unreleased")).not.toContain("8.md\n?")
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -92,16 +92,16 @@ describe("changelog-fragments-cli.ts from-diff on package logs", () => {
     const dir = scratch()
     try {
       git(dir, "checkout", "-q", "-b", "feat")
-      writeFileSync(join(dir, LOG), "# omo-senpi changes\n\n## 2026-10-20 - mine (#12)\n\n## 2026-10-01 - old\n")
+      writeFileSync(join(dir, LOG), "# memory-core changes\n\n## 2026-10-20 - mine (#12)\n\n## 2026-10-01 - old\n")
       commit(dir, "old-style edit")
       git(dir, "checkout", "-q", "dev")
-      writeFileSync(join(dir, LOG), "# omo-senpi changes\n\n## 2026-10-19 - compiled on dev\n\n## 2026-10-01 - old\n")
+      writeFileSync(join(dir, LOG), "# memory-core changes\n\n## 2026-10-19 - compiled on dev\n\n## 2026-10-01 - old\n")
       commit(dir, "dev moved")
       git(dir, "checkout", "-q", "feat")
       const result = bun(dir, ["script/changelog-fragments-cli.ts", "from-diff", "--base", "dev", "--pr", "12"])
       expect(result.status).toBe(0)
       expect(splitFragment(readFileSync(join(dir, "changes/unreleased/12.md"), "utf8")).blocks).toEqual([{ log: LOG, body: "## 2026-10-20 - mine (#12)" }])
-      expect(readFileSync(join(dir, LOG), "utf8")).toBe("# omo-senpi changes\n\n## 2026-10-01 - old\n")
+      expect(readFileSync(join(dir, LOG), "utf8")).toBe("# memory-core changes\n\n## 2026-10-01 - old\n")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

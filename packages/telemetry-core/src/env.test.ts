@@ -65,8 +65,6 @@ describe("DO_NOT_TRACK global opt-out", () => {
   describe("#given DO_NOT_TRACK is 1", () => {
     test.each([
       ["omo-opencode", "OMO_OPENCODE"],
-      ["omo-codex", "OMO_CODEX"],
-      ["omo-senpi", "OMO_SENPI"],
     ] as const)("#when evaluated for %s #then telemetry is disabled", (_product, productEnvPrefix) => {
       // when
       const result = shouldDisableTelemetry({

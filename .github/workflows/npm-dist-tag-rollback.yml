@@ -46,7 +46,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
         run: |
           set -euo pipefail
-          OMO_AI_VERSION="${VERSION/-/-0.}"
           PLATFORMS=(darwin-arm64 darwin-x64 darwin-x64-baseline linux-x64 linux-x64-baseline linux-arm64 linux-x64-musl linux-x64-musl-baseline linux-arm64-musl windows-x64 windows-x64-baseline windows-arm64)
           retag() {
             local pkg="$1" ver="$2"
@@ -58,8 +57,6 @@ jobs:
           }
           retag oh-my-opencode "$VERSION"
           retag oh-my-openagent "$VERSION"
-          retag lazycodex-ai "$VERSION"
-          retag omo-ai "$OMO_AI_VERSION"
           for plat in "${PLATFORMS[@]}"; do
             retag "oh-my-opencode-$plat" "$VERSION"
             retag "oh-my-openagent-$plat" "$VERSION"

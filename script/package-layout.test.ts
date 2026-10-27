@@ -7,23 +7,6 @@ import { fileURLToPath } from "node:url"
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url))
 const commandRoots = [".opencode/command", ".agents/command"] as const
 const skillRoots = [".opencode/skills", ".agents/skills"] as const
-const codexMaterializedRuntimePayloadPaths = [
-  "dist/cli/index.js",
-  "dist/cli-node/index.js",
-  "packages/omo-codex/plugin/components/bootstrap/dist/cli.js",
-  "packages/omo-codex/plugin/components/bootstrap/scripts/bootstrap.ps1",
-  "packages/omo-codex/plugin/components/bootstrap/scripts/node-dispatch.ps1",
-  "packages/omo-codex/plugin/components/comment-checker/dist/cli.js",
-  "packages/omo-codex/plugin/components/git-bash/dist/cli.js",
-  "packages/omo-codex/plugin/components/lazycodex-executor-verify/dist/cli.js",
-  "packages/omo-codex/plugin/components/lsp/dist/cli.js",
-  "packages/omo-codex/plugin/components/rules/dist/cli.js",
-  "packages/omo-codex/plugin/components/ulw-execute-continuation/dist/cli.js",
-  "packages/omo-codex/plugin/components/teammode/dist/cli.js",
-  "packages/omo-codex/plugin/components/telemetry/dist/cli.js",
-  "packages/omo-codex/plugin/components/ultrawork/dist/cli.js",
-  "packages/omo-codex/plugin/components/ulw-loop/dist/cli.js",
-] as const
 const webTerminalVisualQaRuntimePaths = [
   "script/qa/strip-ansi.mjs",
   "script/qa/web-terminal-redaction.d.mts",
@@ -203,18 +186,6 @@ describe("published package layout", () => {
     // then
     expect(packedPaths.has(expectedGeneratedInstaller)).toBe(true)
     expect(packedObsoleteForks).toEqual([])
-  }, packDryRunTimeoutMs)
-
-  test("#given Codex materialized runtime payloads #when packing package #then every current payload target ships", async () => {
-    // given
-    const expectedRuntimePaths = codexMaterializedRuntimePayloadPaths
-
-    // when
-    const packedPaths = await packDryRunPaths()
-    const missingRuntimePaths = expectedRuntimePaths.filter((expectedPath) => !packedPaths.has(expectedPath))
-
-    // then
-    expect(missingRuntimePaths).toEqual([])
   }, packDryRunTimeoutMs)
 
   test("#given shipped QA skills reference web terminal helpers #when packing package #then helper runtime ships", async () => {

@@ -37,7 +37,7 @@ export function buildToolIssues(summary: ToolsSummary): DoctorIssue[] {
     issues.push({
       title: "AST-Grep unavailable",
       description: "AST-Grep CLI is not available.",
-      fix: "The ast-grep skill resolves sg automatically; run omo doctor or lazycodex-ai doctor to check provisioning.",
+      fix: "The ast-grep skill resolves sg automatically; run `omo doctor` to check provisioning.",
       severity: "warning",
       affects: ["ast-grep skill"],
     })

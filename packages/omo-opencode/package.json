@@ -32,7 +32,6 @@
     "@oh-my-opencode/hashline-core": "workspace:*",
     "@oh-my-opencode/mcp-client-core": "workspace:*",
     "@oh-my-opencode/model-core": "workspace:*",
-    "@oh-my-opencode/omo-codex": "workspace:*",
     "@oh-my-opencode/omo-config-core": "workspace:*",
     "@oh-my-opencode/openclaw-core": "workspace:*",
     "@oh-my-opencode/prompts-core": "workspace:*",

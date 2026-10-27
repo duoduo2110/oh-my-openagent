@@ -14,14 +14,14 @@ type CommandExecuteBeforeOutput = {
   parts: Array<{ type: string; text?: string; [key: string]: unknown }>
 }
 
-const NATIVE_GOAL_COMMAND_MARKER = "<omo-native-goal-command>"
+const GOAL_COMMAND_MARKER = "<omo-goal-command>"
 
 export function markNativeGoalCommand(
   parts: CommandExecuteBeforeOutput["parts"],
 ): void {
   parts.push({
     type: "text",
-    text: NATIVE_GOAL_COMMAND_MARKER,
+    text: GOAL_COMMAND_MARKER,
     synthetic: true,
   })
 }
@@ -32,7 +32,7 @@ export function consumeNativeGoalCommandMarker(
   const markerIndex = parts.findIndex(
     (part) => (
       part.type === "text"
-      && part.text === NATIVE_GOAL_COMMAND_MARKER
+      && part.text === GOAL_COMMAND_MARKER
       && part["synthetic"] === true
     ),
   )

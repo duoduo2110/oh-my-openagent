@@ -13,7 +13,7 @@ import { join } from "node:path"
  * Regression pinned (2026-09-04, beta.42): `npm publish` printed "+ omo-ai@5.0.0-0.beta.42" and
  * "Your package is being processed and may take a few minutes to become available", yet the verify
  * step gave up after 5 x 15 s = 60 s and failed the release run - a false failure of a successful
- * publish (the same shape that bit lazycodex-ai in beta.31 and beta.34). The registry showed the
+ * publish (a shape the release pipeline has been bitten by before). The registry showed the
  * version roughly five minutes after publish.
  */
 

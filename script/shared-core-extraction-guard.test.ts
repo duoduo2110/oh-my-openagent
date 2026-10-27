@@ -14,7 +14,6 @@ const forbiddenSourcePatterns: readonly ForbiddenSourcePattern[] = [
   { pattern: /@opencode-ai\// },
   { pattern: /@code-yeongyu\/senpi/ },
   { pattern: /packages\/omo-codex\/plugin/ },
-  { pattern: /packages\/omo-senpi\/plugin/ },
   { pattern: /@earendil-works\/pi-/ },
   { pattern: /@mariozechner\/pi-/ },
   { pattern: /plugin\/components/ },

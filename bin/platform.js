@@ -1,11 +1,6 @@
 // bin/platform.js
 // Shared platform detection module - used by wrapper and postinstall
 
-const PLATFORM_PACKAGE_BASE_BY_WRAPPER_NAME = {
-  lazycodex: "oh-my-openagent",
-  "lazycodex-ai": "oh-my-openagent",
-};
-
 export function getPackageBareName(packageName) {
   return packageName.split("/").pop() || packageName;
 }
@@ -17,8 +12,7 @@ export function getPackageBareName(packageName) {
  * @returns {string}
  */
 export function resolvePlatformPackageBaseName(wrapperPackageName) {
-  const bareName = getPackageBareName(wrapperPackageName);
-  return PLATFORM_PACKAGE_BASE_BY_WRAPPER_NAME[bareName] ?? wrapperPackageName;
+  return getPackageBareName(wrapperPackageName);
 }
 
 /**

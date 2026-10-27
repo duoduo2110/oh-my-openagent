@@ -80,7 +80,7 @@ it("skips generated sources by path, so only hand-written files are ratcheted", 
   expect(
     ratchetedFiles([
       "packages/telemetry-core/src/otlp-proto/opentelemetry/proto/common/v1/common_pb.ts",
-      "packages/senpi-desktop-protocol/src/engine-schema.generated.ts",
+      "packages/lsp-daemon/src/engine-schema.generated.ts",
       "packages/telemetry-core/src/otlp-proto/handwritten.ts",
       "packages/web/lib/pb.ts",
       "README.md",

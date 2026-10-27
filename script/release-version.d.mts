@@ -1,1 +1,1 @@
-export function resolveReleaseVersion(version: string, lazycodexOnly: boolean): { version: string; distTag: string }
+export function resolveReleaseVersion(version: string): { version: string; distTag: string }

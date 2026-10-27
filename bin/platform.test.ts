@@ -11,61 +11,17 @@ import {
 describe("getPackageBareName", () => {
   test("strips npm scope from package name", () => {
     // #given
-    const packageName = "@code-yeongyu/lazycodex";
+    const packageName = "@code-yeongyu/oh-my-openagent";
 
     // #when
     const bareName = getPackageBareName(packageName);
 
     // #then
-    expect(bareName).toBe("lazycodex");
+    expect(bareName).toBe("oh-my-openagent");
   });
 });
 
 describe("resolvePlatformPackageBaseName", () => {
-  test("maps lazycodex wrapper to oh-my-openagent platform package family", () => {
-    // #given
-    const wrapperPackageName = "lazycodex";
-
-    // #when
-    const resolvedPlatformBase = resolvePlatformPackageBaseName(wrapperPackageName);
-
-    // #then
-    expect(resolvedPlatformBase).toBe("oh-my-openagent");
-  });
-
-  test("maps scoped lazycodex wrapper to oh-my-openagent platform package family", () => {
-    // #given
-    const wrapperPackageName = "@code-yeongyu/lazycodex";
-
-    // #when
-    const resolvedPlatformBase = resolvePlatformPackageBaseName(wrapperPackageName);
-
-    // #then
-    expect(resolvedPlatformBase).toBe("oh-my-openagent");
-  });
-
-  test("maps lazycodex-ai wrapper to oh-my-openagent platform package family", () => {
-    // #given
-    const wrapperPackageName = "lazycodex-ai";
-
-    // #when
-    const resolvedPlatformBase = resolvePlatformPackageBaseName(wrapperPackageName);
-
-    // #then
-    expect(resolvedPlatformBase).toBe("oh-my-openagent");
-  });
-
-  test("maps scoped lazycodex-ai wrapper to oh-my-openagent platform package family", () => {
-    // #given
-    const wrapperPackageName = "@code-yeongyu/lazycodex-ai";
-
-    // #when
-    const resolvedPlatformBase = resolvePlatformPackageBaseName(wrapperPackageName);
-
-    // #then
-    expect(resolvedPlatformBase).toBe("oh-my-openagent");
-  });
-
   test("keeps oh-my-opencode wrapper mapped to oh-my-opencode platform package family", () => {
     // #given
     const wrapperPackageName = "oh-my-opencode";

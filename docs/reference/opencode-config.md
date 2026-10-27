@@ -1,6 +1,5 @@
 # OpenCode edition configuration (legacy)
 
-This page documents the `[opencode]` keys and hooks that only the OpenCode edition reads; omo-senpi ignores every one of them. The sections below were moved verbatim from [configuration.md](./configuration.md) and [features.md](./features.md).
 
 ---
 

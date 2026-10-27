@@ -54,7 +54,7 @@ function fieldsOf(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : {}
 }
 
-// The shape reconciliation reads as a RunOutcome (omo-senpi worker/run-artifacts.ts). A file that does
+// The shape reconciliation reads as a RunOutcome. A file that does
 // not match it, or names another run, is not a recorded outcome, so nothing is finalized on it.
 function isRunOutcome(value: unknown, runId: string): boolean {
   const fields = fieldsOf(value)

@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises"
 import color from "picocolors"
 import { PLUGIN_NAME, PUBLISHED_PACKAGE_NAME } from "../shared"
-import type { InstallArgs, InstallPlatform } from "./types"
+import type { InstallArgs } from "./types"
 import {
   addPluginToOpenCodeConfig,
   detectCurrentConfig,
@@ -24,10 +24,6 @@ import {
   validateNonTuiArgs,
 } from "./install-validators"
 import { getUnsupportedOpenCodeVersionMessage } from "./minimum-opencode-version"
-import { runCodexInstaller } from "./install-codex"
-import { runNativeDevInstaller } from "./install-native-dev"
-import { nativeInstallFailureLines, nativeInstallSuccessLine, runNativeInstall } from "./install-native"
-import { NATIVE_EDITION_HINT_TITLE, nativeEditionHintLines, shouldShowNativeEditionHint } from "./native-edition-hint"
 import { starGitHubRepositories } from "./star-request"
 import { getNoModelProvidersWarning, hasAnyConfiguredProvider } from "./provider-availability"
 import { ensureTuiPluginEntry } from "./config-manager/add-tui-plugin-to-tui-config"
@@ -62,7 +58,6 @@ export async function runCliInstaller(args: InstallArgs, version: string): Promi
         hasOpenAI: false,
         hasGemini: false,
         hasCopilot: false,
-        hasCodex: false,
         hasOpencodeZen: false,
         hasZaiCodingPlan: false,
         hasKimiForCoding: false,
@@ -169,51 +164,6 @@ export async function runCliInstaller(args: InstallArgs, version: string): Promi
   }
   console.log()
 
-  if (config.hasCodex) {
-    printInfo("Installing Codex harness adapter...")
-    try {
-      const codexResult = await runCodexInstaller({ autonomousPermissions: config.codexAutonomous })
-      printSuccess(`Codex plugin installed ${SYMBOLS.arrow} ${color.dim(codexResult.configPath)}`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!config.hasOpenCode) {
-        printError(`Codex install failed: ${message}`)
-        return 1
-      }
-      printWarning(`Codex install failed (OpenCode install is still complete): ${message}`)
-      printInfo(
-        `The Codex harness is NOT installed. Fix the error above, then re-run: ${color.cyan("bunx oh-my-openagent install --platform=codex")}`,
-      )
-    }
-    console.log()
-  }
-
-  if (config.hasNative) {
-    printInfo("Installing OmO Native...")
-    const outcome = await runNativeInstall()
-    for (const note of outcome.notes) printInfo(note)
-    for (const warning of outcome.warnings) printWarning(warning)
-    if (outcome.failure) {
-      for (const line of nativeInstallFailureLines(outcome.failure)) printError(line)
-      return 1
-    }
-    printSuccess(nativeInstallSuccessLine(outcome.verified))
-    console.log()
-  }
-
-  if (config.hasNativeDev) {
-    printInfo("Installing the OmO Native development adapter...")
-    try {
-      const nativeDevResult = await runNativeDevInstaller()
-      printSuccess(`OmO Native development adapter installed ${SYMBOLS.arrow} ${color.dim(nativeDevResult.settingsPath)}`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      printError(`OmO Native development adapter install failed: ${message}`)
-      return 1
-    }
-    console.log()
-  }
-
   printInfo(
     "Anonymous telemetry is enabled by default. Disable it with OMO_SEND_ANONYMOUS_TELEMETRY=0 or OMO_DISABLE_POSTHOG=1.",
   )
@@ -227,16 +177,8 @@ export async function runCliInstaller(args: InstallArgs, version: string): Promi
     "The Magic Word",
   )
 
-  if (shouldShowNativeEditionHint(config)) {
-    printInfo(color.bold(NATIVE_EDITION_HINT_TITLE))
-    for (const line of nativeEditionHintLines({ command: color.cyan, link: color.underline })) {
-      console.log(`    ${line}`)
-    }
-    console.log()
-  }
-
   if (args.tui) {
-    await maybePromptForGitHubStars(config.platform)
+    await maybePromptForGitHubStars()
   }
   console.log(color.dim("oMoMoMoMo... Enjoy!"))
   console.log()
@@ -254,7 +196,7 @@ export async function runCliInstaller(args: InstallArgs, version: string): Promi
   return 0
 }
 
-async function maybePromptForGitHubStars(platform: InstallPlatform): Promise<void> {
+async function maybePromptForGitHubStars(): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return
 
   const readline = createInterface({ input: process.stdin, output: process.stdout })
@@ -265,7 +207,7 @@ async function maybePromptForGitHubStars(platform: InstallPlatform): Promise<voi
     readline.close()
   }
 
-  const results = await starGitHubRepositories(platform)
+  const results = await starGitHubRepositories()
   const failed = results.filter((result) => !result.ok)
   if (failed.length === 0) {
     printSuccess("Starred GitHub repositories")

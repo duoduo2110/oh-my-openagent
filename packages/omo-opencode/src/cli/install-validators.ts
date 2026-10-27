@@ -1,12 +1,10 @@
 import color from "picocolors"
-import { NATIVE_PACKAGE_SPEC } from "./install-native/plan"
 import type {
   BooleanArg,
   ClaudeSubscription,
   DetectedConfig,
   InstallArgs,
   InstallConfig,
-  InstallPlatform,
 } from "./types"
 
 export const SYMBOLS = {
@@ -33,16 +31,6 @@ export function formatConfigSummary(config: InstallConfig): string {
 
   lines.push(color.bold(color.white("Configuration Summary")))
   lines.push("")
-  lines.push(`  ${SYMBOLS.info} Platform: ${config.platform}`)
-  if (config.hasCodex) {
-    lines.push(`  ${SYMBOLS.info} Codex autonomous mode: ${config.codexAutonomous ? "enabled" : "disabled"}`)
-  }
-  if (config.hasNative) {
-    lines.push(`  ${SYMBOLS.info} OmO Native: installing from ${NATIVE_PACKAGE_SPEC}`)
-  }
-  if (config.hasNativeDev) {
-    lines.push(`  ${SYMBOLS.info} OmO Native development adapter: enabled`)
-  }
 
   if (!config.hasOpenCode) return lines.join("\n")
 
@@ -134,9 +122,7 @@ export function printBox(content: string, title?: string): void {
 
 export function validateNonTuiArgs(args: InstallArgs): { valid: boolean; errors: string[] } {
   const errors: string[] = []
-  const platform = resolvePlatform(args)
-  const hasOpenCode = platform === "opencode" || platform === "both"
-  const hasCodexOnly = platform === "codex"
+  const hasOpenCode = true
 
   if (hasOpenCode && args.claude === undefined) {
     errors.push("--claude is required (values: no, yes, max20)")
@@ -192,53 +178,19 @@ export function validateNonTuiArgs(args: InstallArgs): { valid: boolean; errors:
     errors.push(`Invalid --vercel-ai-gateway value: ${args.vercelAiGateway} (expected: no, yes)`)
   }
 
-  if (hasCodexOnly) {
-    const opencodeFlagErrors = collectCodexOnlyOpenCodeFlagErrors(args)
-    errors.push(...opencodeFlagErrors)
-  }
-
   return { valid: errors.length === 0, errors }
 }
 
-function resolvePlatform(args: InstallArgs): InstallPlatform {
-  return args.platform ?? "opencode"
-}
-
-function collectCodexOnlyOpenCodeFlagErrors(args: InstallArgs): string[] {
-  const errors: string[] = []
-  if (args.claude !== undefined) errors.push("--claude cannot be used with --platform=codex")
-  if (args.openai !== undefined) errors.push("--openai cannot be used with --platform=codex")
-  if (args.gemini !== undefined) errors.push("--gemini cannot be used with --platform=codex")
-  if (args.copilot !== undefined) errors.push("--copilot cannot be used with --platform=codex")
-  if (args.opencodeZen !== undefined) errors.push("--opencode-zen cannot be used with --platform=codex")
-  if (args.zaiCodingPlan !== undefined) errors.push("--zai-coding-plan cannot be used with --platform=codex")
-  if (args.kimiForCoding !== undefined) errors.push("--kimi-for-coding cannot be used with --platform=codex")
-  if (args.opencodeGo !== undefined) errors.push("--opencode-go cannot be used with --platform=codex")
-  if (args.bailianCodingPlan !== undefined) errors.push("--bailian-coding-plan cannot be used with --platform=codex")
-  if (args.minimaxCnCodingPlan !== undefined) errors.push("--minimax-cn-coding-plan cannot be used with --platform=codex")
-  if (args.minimaxCodingPlan !== undefined) errors.push("--minimax-coding-plan cannot be used with --platform=codex")
-  if (args.vercelAiGateway !== undefined) errors.push("--vercel-ai-gateway cannot be used with --platform=codex")
-  return errors
-}
-
 export function argsToConfig(args: InstallArgs): InstallConfig {
-  const platform = resolvePlatform(args)
-  const hasOpenCode = platform === "opencode" || platform === "both"
-  const hasCodex = platform === "codex" || platform === "both"
-  const hasNative = platform === "native"
-  const hasNativeDev = platform === "native-dev"
+  const hasOpenCode = true
 
   return {
-    platform,
     hasOpenCode,
     hasClaude: hasOpenCode && args.claude !== "no",
     isMax20: args.claude === "max20",
     hasOpenAI: hasOpenCode && args.openai === "yes",
     hasGemini: hasOpenCode && args.gemini === "yes",
     hasCopilot: hasOpenCode && args.copilot === "yes",
-    hasCodex,
-    hasNative,
-    hasNativeDev,
     hasOpencodeZen: hasOpenCode && args.opencodeZen === "yes",
     hasZaiCodingPlan: hasOpenCode && args.zaiCodingPlan === "yes",
     hasKimiForCoding: hasOpenCode && args.kimiForCoding === "yes",
@@ -247,7 +199,6 @@ export function argsToConfig(args: InstallArgs): InstallConfig {
     hasMinimaxCnCodingPlan: hasOpenCode && args.minimaxCnCodingPlan === "yes",
     hasMinimaxCodingPlan: hasOpenCode && args.minimaxCodingPlan === "yes",
     hasVercelAiGateway: hasOpenCode && args.vercelAiGateway === "yes",
-    codexAutonomous: hasCodex && args.codexAutonomous !== false,
   }
 }
 

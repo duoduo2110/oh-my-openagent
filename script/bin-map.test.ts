@@ -21,7 +21,7 @@ describe("root package.json bin map", () => {
 
   test("#given the renamed bin map #when inspecting entries #then the four surviving aliases keep the shared entry", () => {
     // given
-    const survivingAliases = ["oh-my-opencode", "oh-my-openagent", "lazycodex", "lazycodex-ai"];
+    const survivingAliases = ["oh-my-opencode", "oh-my-openagent", "omo-agent-toolkit"];
 
     // then
     for (const alias of survivingAliases) {

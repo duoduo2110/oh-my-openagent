@@ -12,7 +12,7 @@ import { removeTree } from "../../../../test-support/remove-tree"
 // new process must not list the tree, read blobs or walk history again for a block an earlier process compiled.
 // That work is the relaunch cost of the prompt path (about 94 ms warm and 3.5 s on a cold pack, 6.9k notes).
 
-const TEMPLATE = "omo-senpi:before_agent_start:v3:cache-agent"
+const TEMPLATE = "omo-opencode:before_agent_start:v3:cache-agent"
 const OPTIONS = { agentId: "cache-agent" }
 const STORE_FILE_PREFIX = "omo-memory-block-"
 const tempDirs: string[] = []

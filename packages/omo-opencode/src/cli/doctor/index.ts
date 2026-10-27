@@ -27,5 +27,4 @@ export function formatDoctorFailure(error: unknown): string[] {
 
 export * from "./framework/types"
 export { runDoctor } from "./runner"
-export { resolveDoctorTarget } from "./framework/doctor-target"
 export { formatDoctorOutput, formatJsonOutput } from "./framework/formatter"

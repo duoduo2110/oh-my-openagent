@@ -12,5 +12,5 @@
     "noEmit": true
   },
   "include": ["./*.ts", "installer/**/*.ts", "qa/**/*.ts"],
-  "exclude": ["qa/fixtures/**", "qa/omo-native-telemetry-qa.test.ts"]
+  "exclude": ["qa/fixtures/**"]
 }
