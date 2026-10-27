@@ -17,8 +17,11 @@
  *   - `<location>/.opencode/agent/<name>.md` → discovered when the location is a real project
  *     (git worktree root); it WINS over the global file of the same name.
  *   - Files are picked up without a host restart or `/api/location/reload`.
- * Default scope is `project` so a user's global config is not polluted; `OMO_V2_AGENT_SCOPE=global`
- * switches it.
+ * Default scope is `global`: the project directory belongs to the user's repository (`.gitignore`
+ * in this repo protects nothing in *their* project), so writing there by default would leave ten
+ * untracked files in every location the plugin is opened in. `OMO_V2_AGENT_SCOPE=project` opts back
+ * in; a global directory that cannot be written falls back to the project scope with a warning
+ * instead of failing setup.
  */
 import * as crypto from "node:crypto"
 import * as fs from "node:fs"
@@ -64,8 +67,12 @@ export type V2AgentScope = "project" | "global"
 
 export const V2_AGENT_SCOPE_ENV = "OMO_V2_AGENT_SCOPE"
 
+/**
+ * `global` unless `OMO_V2_AGENT_SCOPE=project`: the project directory belongs to the user's
+ * repository, so the opt-in is the scope that writes there.
+ */
 export function resolveV2AgentScope(env: NodeJS.ProcessEnv = process.env): V2AgentScope {
-  return env[V2_AGENT_SCOPE_ENV]?.trim().toLowerCase() === "global" ? "global" : "project"
+  return env[V2_AGENT_SCOPE_ENV]?.trim().toLowerCase() === "project" ? "project" : "global"
 }
 
 /** `$XDG_CONFIG_HOME/opencode/agent` (the directory V2 itself scans for global agents). */
@@ -80,6 +87,52 @@ export function globalAgentDirectory(env: NodeJS.ProcessEnv = process.env): stri
 /** `<location>/.opencode/agent` — project scope, next to the config V2 reads for that location. */
 export function projectAgentDirectory(locationDirectory: string): string {
   return path.join(locationDirectory, ".opencode", "agent")
+}
+
+/**
+ * Proves the directory can actually receive a file. Permission bits alone are not enough (the
+ * e2e container runs as root, where a read-only directory still accepts writes), so the check
+ * writes and removes a probe file.
+ */
+function ensureWritableDirectory(directory: string): void {
+  fs.mkdirSync(directory, { recursive: true })
+  const probe = path.join(directory, `.omo-write-probe-${process.pid}`)
+  fs.writeFileSync(probe, "", "utf8")
+  fs.unlinkSync(probe)
+}
+
+export type V2AgentScopeResolution = {
+  /** The scope actually used; `project` when the global directory is unusable. */
+  readonly scope: V2AgentScope
+  readonly directory: string
+  readonly warnings: readonly string[]
+}
+
+/**
+ * Resolves the scope to a directory and degrades `global` -> `project` when the global agent
+ * directory cannot be written (`XDG_CONFIG_HOME` on a read-only mount, a regular file in place of
+ * the directory, ...). A degraded scope is reported, never silently swapped.
+ */
+export function resolveAgentScopeDirectory(input: {
+  readonly locationDirectory: string
+  readonly scope?: V2AgentScope
+  readonly env?: NodeJS.ProcessEnv
+}): V2AgentScopeResolution {
+  const scope = input.scope ?? resolveV2AgentScope(input.env)
+  const project = projectAgentDirectory(input.locationDirectory)
+  if (scope === "project") {
+    return { scope, directory: project, warnings: [] }
+  }
+
+  const global = globalAgentDirectory(input.env)
+  try {
+    ensureWritableDirectory(global)
+    return { scope: "global", directory: global, warnings: [] }
+  } catch (error) {
+    const warning = `global agent directory ${global} is not writable (${String(error)}); falling back to project scope ${project}`
+    log(`${AGENTS_LOG_PREFIX} scope fallback`, { requested: "global", used: "project", global, project })
+    return { scope: "project", directory: project, warnings: [warning] }
+  }
 }
 
 function agentDirectory(scope: V2AgentScope, locationDirectory: string, env?: NodeJS.ProcessEnv): string {
@@ -381,8 +434,9 @@ export async function buildBuiltinAgentConfigs(
  */
 export async function materializeOpenCodeV2Agents(context: Context): Promise<V2AgentMaterializationReport> {
   const locationDirectory = String(context.location.directory)
-  const scope = resolveV2AgentScope()
-  const warnings: string[] = []
+  const scopeResolution = resolveAgentScopeDirectory({ locationDirectory })
+  const scope = scopeResolution.scope
+  const warnings: string[] = [...scopeResolution.warnings]
   let report: V2AgentMaterializationReport
 
   try {

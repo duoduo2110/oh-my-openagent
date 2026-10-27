@@ -78,8 +78,11 @@ usage() {
   e2e-s2a       V1 运行时装配到 V2 宿主（S2a）：真实 serve 容器的插件日志出现
                 [omo-v2] runtime assembled hooks/tools/managers/agents 计数，且适配器自测通过；
                 证据落 .slim/v2-evidence/s2a-<ts>.json
-  e2e-s3a       内置 10 agent 物化为 V2 可发现的 markdown（S3a）：/api/agent 名称与 mode、二次 setup 全 skipped、
-                禁用后删除 md、global scope，证据落 .slim/v2-evidence/s3a-<ts>.json
+  e2e-s2b1      机械 hook 桥接（S2b-1）：真实 serve 冒烟 event 泵/桥接安装行/无未捕获异常，
+                自测断言每个桥接点真的调用 V1 handler 并回写；证据落 .slim/v2-evidence/s2b1-<ts>.json
+  e2e-s3a       内置 10 agent 物化为 V2 可发现的 markdown（S3a）：默认 global scope、/api/agent 名称与 mode、
+                二次 setup 全 skipped、禁用后删除 md、OMO_V2_AGENT_SCOPE=project 反向 opt-in，
+                证据落 .slim/v2-evidence/s3a-<ts>.json
   e2e-v1        V1 回归门禁：真实 OpenCode 1.x CLI 加载本仓库插件，断言 V1 装配成功且无任何 V2 提示/探针，
                 证据落 .slim/v2-evidence/e2e-v1-<ts>.log
 
@@ -1031,11 +1034,317 @@ PY
 }
 
 
+# S2b-1 acceptance: the mechanical hook bridge is installed on a real host and proven by a selftest.
+#
+#   1. a real OpenCode 2 serve container whose plugin log carries
+#        [omo-v2] hook event pump started
+#        [omo-v2] hook bridge installed {"bridged":[...],"degraded":[...],...}
+#        [omo-v2] hooks disabled: <list>
+#        [omo-v2] hook tools {...}   (host tool count == S1a's, grep listed once, V1 description)
+#      with every mechanical key present, `command.execute.before` recorded as a degradation and no
+#      uncaught exception in the host output;
+#   2. the hooks selftest, which drives a fake V2 context against the real V1 runtime and proves each
+#      bridge writes back (event pump lifecycle, tool before/after, tool.definition, compaction),
+#      that the disabled hook factories never exist, and that the bridge adds no tool.
+cmd_e2e_s2b1() {
+  mkdir -p "$EVIDENCE_DIR"
+  local ts api_json serve_log plugin_log selftest_log result_file status=1 selftest_status=1 verdict=0
+  ts="$(date +%Y%m%d-%H%M%S)"
+  api_json="$EVIDENCE_DIR/s2b1-${ts}.plugin.json"
+  serve_log="$EVIDENCE_DIR/s2b1-${ts}.serve.log"
+  plugin_log="$EVIDENCE_DIR/s2b1-${ts}.plugin.log"
+  selftest_log="$EVIDENCE_DIR/s2b1-${ts}.selftest.log"
+  result_file="$EVIDENCE_DIR/s2b1-${ts}.json"
+
+  # Same port override trick as S2a: a second lane can run its own serve on another port.
+  local compose_files=(-f "$COMPOSE_FILE") port_override=""
+  if [ "${HOST_PORT}" != "14096" ]; then
+    port_override="/tmp/omo-v2-s2b1-port-${HOST_PORT}.yaml"
+    cat > "$port_override" <<YAML
+services:
+  serve:
+    ports: !override
+      - "127.0.0.1:${HOST_PORT}:4096"
+YAML
+    compose_files+=(-f "$port_override")
+  fi
+
+  s2b1_compose() { docker compose "${compose_files[@]}" -p "$PROJECT" "$@"; }
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "==> 镜像缺失，先构建 $IMAGE"
+    compose build
+  fi
+
+  echo "==> 构建 V2 插件产物 (dist/index.js)"
+  cmd_build_index
+
+  echo "==> 写入插件目录与 V2 配置: $PLUGIN_DIR"
+  stage_plugin | sed 's/^/    /'
+
+  echo "==> 启动 serve 容器 (宿主 127.0.0.1:${HOST_PORT} -> 4096)"
+  s2b1_compose rm -sf serve >/dev/null 2>&1 || true
+  # One clean plugin log per run so a stale bridge line can never satisfy the assertions.
+  run_v2 bash -lc "rm -f '${PLUGIN_LOG_FILE}'" >/dev/null 2>&1 || true
+  s2b1_compose up -d --no-build serve
+
+  local tmp deadline
+  tmp="$(mktemp)"
+  deadline=$(( $(date +%s) + 90 ))
+  while :; do
+    curl -fsS --max-time 3 -u "${SERVE_USER}:${SERVE_PASSWORD}" \
+      "$SERVE_URL/api/plugin" -o "$tmp" 2>/dev/null || true
+    if [ -s "$tmp" ] && api_has_plugin "$tmp"; then
+      status=0
+      break
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "!!! 90s 内 /api/plugin 未出现插件 ${PLUGIN_ID_EXPECTED}" >&2
+      break
+    fi
+    sleep 3
+  done
+  cp "$tmp" "$api_json" 2>/dev/null || true
+  rm -f "$tmp"
+
+  # The logger flushes on a 500ms timer; give it a beat, then snapshot both logs.
+  sleep 2
+  docker exec omo-v2-serve bash -lc "cat '${PLUGIN_LOG_FILE}' 2>/dev/null" > "$plugin_log" 2>/dev/null || true
+  s2b1_compose logs --no-color --timestamps serve > "$serve_log" 2>&1 || true
+
+  echo "==> 机械 hook 桥接自测（假 V2 ctx + 真 V1 运行时）"
+  set +e
+  timeout 300 docker compose -f "$COMPOSE_FILE" -p "$PROJECT" run --rm -T --no-deps v2 \
+    env TMPDIR=/tmp/s2b1-selftest \
+    bash -lc 'mkdir -p /tmp/s2b1-selftest && rm -f /tmp/s2b1-selftest/oh-my-opencode.log && bun packages/omo-opencode/src/opencode-v2/__tests__/hooks.selftest.ts' \
+    > "$selftest_log" 2>&1
+  selftest_status=$?
+  set -e
+  grep -E "^(PASS|FAIL)" "$selftest_log" | tail -4 | sed 's/^/    /'
+  tail -2 "$selftest_log" | sed 's/^/    /'
+
+  python3 - "$plugin_log" "$serve_log" "$api_json" "$selftest_status" "$result_file" "$SERVE_URL" \
+    "$PLUGIN_ID_EXPECTED" "$selftest_log" <<'PY' || verdict=$?
+import datetime
+import json
+import re
+import sys
+
+(plugin_log_path, serve_log_path, plugins_path, selftest_status, out_path, serve_url,
+ plugin_id, selftest_log_path) = sys.argv[1:9]
+
+REQUIRED_BRIDGED = [
+    "tool.execute.before",
+    "tool.execute.after",
+    "tool.definition",
+    "experimental.session.compacting",
+    "experimental.compaction.autocontinue",
+    "event",
+]
+INSTALLED_MARKER = "[omo-v2] hook bridge installed "
+PUMP_MARKER = "[omo-v2] hook event pump started"
+DISABLED_MARKER = "[omo-v2] hooks disabled:"
+REQUIRED_DISABLED = [
+    "claude-code-hooks",
+    "compaction-context-injector",
+    "compaction-todo-preserver",
+    "preemptive-compaction",
+    "session-notification",
+    "todo-continuation-enforcer",
+]
+BRIDGE_TOOLS_MARKER = "[omo-v2] hook tools "
+TOOLS_MARKER = "[omo-v2] tools "
+GREP_DESCRIPTION_PREFIX = "Fast content search tool with safety limits"
+UNCAUGHT_MARKERS = [
+    "Uncaught",
+    "uncaughtException",
+    "UnhandledPromiseRejection",
+    "unhandledRejection",
+    "unhandled promise rejection",
+]
+
+
+def load_json(path, fallback):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return fallback
+
+
+def read_lines(path):
+    try:
+        return open(path, encoding="utf-8", errors="replace").read().splitlines()
+    except Exception:
+        return []
+
+
+def last_prefixed_json(lines, prefix):
+    for line in reversed(lines):
+        if prefix in line:
+            try:
+                return json.loads(line.split(prefix, 1)[1].strip())
+            except Exception:
+                return None
+    return None
+
+
+def disabled_from_line(line):
+    payload = line.split(DISABLED_MARKER, 1)[1].strip()
+    head = payload.split(" {", 1)[0].strip()
+    return [name for name in head.split(",") if name and name != "<none>"]
+
+
+lines = read_lines(plugin_log_path)
+serve_lines = read_lines(serve_log_path)
+
+installed = None
+for line in lines:
+    if INSTALLED_MARKER in line:
+        try:
+            installed = json.loads(line.split(INSTALLED_MARKER, 1)[1].strip())
+        except Exception:
+            installed = None
+
+bridged = list((installed or {}).get("bridged") or [])
+degraded = list((installed or {}).get("degraded") or [])
+missing = [key for key in REQUIRED_BRIDGED if key not in bridged]
+command_degraded = [entry for entry in degraded if entry.get("key") == "command.execute.before"]
+pump_started = any(PUMP_MARKER in line for line in lines)
+pump_stopped = any("[omo-v2] hook event pump stopped" in line for line in lines)
+reused = [line for line in lines if "[omo-v2] hook bridge reused" in line]
+skipped = [line for line in lines if "[omo-v2] hook bridge skipped" in line]
+uncaught = [line for line in serve_lines if any(marker in line for marker in UNCAUGHT_MARKERS)]
+
+# Gate 2 followup 3: the disable list must be visible, complete, and the hook bridge must not
+# change the tool list S1a registered.
+disabled_line = next((line for line in reversed(lines) if DISABLED_MARKER in line), None)
+disabled_hooks = disabled_from_line(disabled_line) if disabled_line else []
+missing_disabled = [name for name in REQUIRED_DISABLED if name not in disabled_hooks]
+bridge_tools = last_prefixed_json(lines, BRIDGE_TOOLS_MARKER) or {}
+s1a_tools = last_prefixed_json(lines, TOOLS_MARKER) or {}
+tool_count_before_bridge = s1a_tools.get("count")
+tool_count_after_bridge = bridge_tools.get("count")
+
+plugins_body = load_json(plugins_path, {"data": []})
+plugin_entry = next((entry for entry in (plugins_body.get("data") or [])
+                     if entry.get("id") == plugin_id), None)
+
+try:
+    selftest_text = open(selftest_log_path, encoding="utf-8", errors="replace").read()
+except Exception:
+    selftest_text = ""
+selftest_match = re.search(r"S2b-1 hooks selftest: (\d+)/(\d+) passed", selftest_text)
+selftest_passed = bool(
+    selftest_status == "0"
+    and selftest_match
+    and selftest_match.group(1) == selftest_match.group(2)
+)
+selftest_tail = selftest_text.splitlines()[-3:]
+writeback_proved = "PASS before rewrite: bash null bytes written back" in selftest_text
+pump_frozen_proved = "PASS counters frozen after cleanup" in selftest_text
+definition_proved = "PASS tool.definition writeback: todowrite description" in selftest_text
+compaction_proved = "PASS compaction writeback: V1 context in system" in selftest_text
+disabled_proved = "PASS disabled hooks are never assembled (cannot fire)" in selftest_text
+tool_ownership_proved = "PASS tool ownership: grep listed once with the V1 description" in selftest_text
+
+assertions = {
+    "pluginActive": plugin_entry is not None and (plugin_entry.get("state") or {}).get("status") == "active",
+    "pluginLogFound": len(lines) > 0,
+    "bridgeInstalled": installed is not None,
+    "allMechanicalKeysBridged": len(missing) == 0,
+    "pumpStarted": pump_started,
+    "noUncaughtHostError": len(uncaught) == 0,
+    "commandBeforeDegraded": len(command_degraded) >= 1,
+    "noDuplicateInstall": len(reused) == 0,
+    "runtimeNotSkipped": len(skipped) == 0,
+    "hooksDisabledLogged": disabled_line is not None,
+    "hooksDisabledDefaults": len(missing_disabled) == 0,
+    "hookBridgeToolsProbed": bridge_tools.get("available") is True,
+    "toolCountUnchangedByBridge": tool_count_before_bridge is not None
+        and tool_count_before_bridge == tool_count_after_bridge,
+    "grepListedOnce": bridge_tools.get("grepCount") == 1,
+    "grepDescriptionFromV1": str(bridge_tools.get("grepDescription") or "").startswith(GREP_DESCRIPTION_PREFIX),
+    "hookBridgeAddsNoTool": bridge_tools.get("bridgeRegistersTools") is False and "tool" not in bridged,
+    "selftestPassed": selftest_passed,
+    "selftestWritebackProved": writeback_proved,
+    "selftestPumpFrozen": pump_frozen_proved,
+    "selftestDefinitionProved": definition_proved,
+    "selftestCompactionProved": compaction_proved,
+    "selftestDisabledHooksProved": disabled_proved,
+    "selftestToolOwnershipProved": tool_ownership_proved,
+}
+
+evidence = {
+    "stage": "s2b1",
+    "capturedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "serveUrl": serve_url,
+    "plugin": {"expectedId": plugin_id, "entry": plugin_entry, "active": assertions["pluginActive"]},
+    "bridge": {
+        "installed": installed,
+        "requiredKeys": REQUIRED_BRIDGED,
+        "missingKeys": missing,
+        "degraded": degraded,
+        "pump": {"started": pump_started, "stoppedBeforeShutdown": pump_stopped},
+    },
+    "disabledHooks": {
+        "line": disabled_line,
+        "observed": disabled_hooks,
+        "required": REQUIRED_DISABLED,
+        "missing": missing_disabled,
+    },
+    "toolOwnership": {
+        "s1aCount": tool_count_before_bridge,
+        "afterBridgeCount": tool_count_after_bridge,
+        "grepCount": bridge_tools.get("grepCount"),
+        "grepDescription": bridge_tools.get("grepDescription"),
+        "hooksToolCount": bridge_tools.get("hooksToolCount"),
+        "bridgeRegistersTools": bridge_tools.get("bridgeRegistersTools"),
+    },
+    "host": {"uncaught": uncaught, "serveLogLines": len(serve_lines)},
+    "selftest": {
+        "exit": int(selftest_status),
+        "summary": selftest_match.group(0) if selftest_match else None,
+        "tail": selftest_tail,
+        "artifacts": selftest_log_path,
+    },
+    "artifacts": {"pluginLog": plugin_log_path, "serveLog": serve_log_path, "plugins": plugins_path},
+    "assertions": assertions,
+    "passed": all(assertions.values()),
+}
+
+json.dump(evidence, open(out_path, "w"), indent=2, ensure_ascii=False)
+print(json.dumps({"assertions": assertions, "bridged": bridged, "missing": missing,
+                  "degradedKeys": [entry.get("key") for entry in degraded],
+                  "disabledHooks": disabled_hooks, "missingDisabled": missing_disabled,
+                  "toolOwnership": evidence["toolOwnership"],
+                  "uncaught": uncaught[:3]}, indent=2, ensure_ascii=False))
+sys.exit(0 if evidence["passed"] else 1)
+PY
+
+  echo "==> 证据: $result_file"
+  echo "==> 插件日志: $plugin_log"
+  echo "==> serve 日志: $serve_log"
+  echo "==> 自测日志: $selftest_log"
+
+  s2b1_compose rm -sf serve >/dev/null 2>&1 || true
+
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: /api/plugin 未列出 ${PLUGIN_ID_EXPECTED}" >&2
+    return 1
+  fi
+  if [ "$verdict" -ne 0 ]; then
+    echo "FAIL: S2b-1 断言未通过（详见 $result_file）" >&2
+    return 1
+  fi
+  echo "OK: S2b-1 通过（event 泵已启动、6 个机械键已桥接、禁用名单已生效、hook 桥接未改动工具表、自测全绿）"
+}
+
 # S3a: the ten built-in agents, materialized as markdown. Four host lifetimes cover the whole story:
-#   A  fresh project location → ten files written and discovered by /api/agent (name + mode)
+#   A  fresh project location, no env → default scope is GLOBAL: ten files in ~/.config/opencode/agent,
+#      nothing written into the user's project
 #   B  second `setup` on the same location → nothing rewritten (`skipped` = 10)
 #   C  `disabled_agents: [momus]` → momus' generated file deleted, momus gone from /api/agent
-#   D  `OMO_V2_AGENT_SCOPE=global` → the same ten files under ~/.config/opencode/agent
+#   D  `OMO_V2_AGENT_SCOPE=project` → reverse opt-in: the same ten files under <location>/.opencode/agent
 # The project location is a throwaway directory inside the container, never /repo: a failing stage
 # must not leave `.opencode/agent` files in the checkout.
 cmd_e2e_s3a() {
@@ -1069,7 +1378,7 @@ cmd_e2e_s3a() {
   echo "==> 准备一次性项目目录 $S3A_PROJECT，并清空 agent 落盘目录"
   run_v2 bash -lc "rm -rf '$S3A_PROJECT' '$S3A_GLOBAL_AGENTS'/*.md /root/.omo/omo.jsonc; mkdir -p '$S3A_PROJECT' '$S3A_GLOBAL_AGENTS'"
 
-  echo "==> 阶段 A：全新项目 location → 10 个 markdown agent"
+  echo "==> 阶段 A：全新项目 location（无环境变量）→ 默认 global scope，10 个 markdown agent"
   s3a_start_serve ""
   s3a_wait_plugin 90 || echo "!!! 90s 内 /api/plugin 未出现 ${PLUGIN_ID_EXPECTED}" >&2
   s3a_wait_agents "$work/a.agents.json" 90 "$ids" || echo "!!! 90s 内 /api/agent 未出现全部 10 个 agent" >&2
@@ -1077,8 +1386,9 @@ cmd_e2e_s3a() {
   curl -fsS --max-time 3 -u "${SERVE_USER}:${SERVE_PASSWORD}" "$SERVE_URL/api/plugin" -o "$work/a.plugins.json" 2>/dev/null || true
   sleep 2
   s3a_plugin_log "$work/a.log"
-  docker exec "$S3A_CONTAINER" bash -lc "ls '$S3A_PROJECT_AGENTS' 2>/dev/null" > "$work/a.files" 2>/dev/null || true
-  docker exec "$S3A_CONTAINER" bash -lc "cat '$S3A_PROJECT_AGENTS/oracle.md' 2>/dev/null" > "$work/oracle.md" 2>/dev/null || true
+  docker exec "$S3A_CONTAINER" bash -lc "ls '$S3A_GLOBAL_AGENTS' 2>/dev/null" > "$work/a.files" 2>/dev/null || true
+  docker exec "$S3A_CONTAINER" bash -lc "ls '$S3A_PROJECT_AGENTS' 2>/dev/null" > "$work/a.project.files" 2>/dev/null || true
+  docker exec "$S3A_CONTAINER" bash -lc "cat '$S3A_GLOBAL_AGENTS/oracle.md' 2>/dev/null" > "$work/oracle.md" 2>/dev/null || true
 
   echo "==> 阶段 B：重启 serve → 第二次 setup 必须全部 skipped"
   docker restart "$S3A_CONTAINER" >/dev/null 2>&1 || true
@@ -1097,17 +1407,17 @@ cmd_e2e_s3a() {
   fetch_agents "$work/c.agents.json"
   sleep 2
   s3a_plugin_log "$work/c.log"
-  docker exec "$S3A_CONTAINER" bash -lc "ls '$S3A_PROJECT_AGENTS' 2>/dev/null" > "$work/c.files" 2>/dev/null || true
+  docker exec "$S3A_CONTAINER" bash -lc "ls '$S3A_GLOBAL_AGENTS' 2>/dev/null" > "$work/c.files" 2>/dev/null || true
 
-  echo "==> 阶段 D：OMO_V2_AGENT_SCOPE=global → 写入全局 agent 目录"
+  echo "==> 阶段 D：OMO_V2_AGENT_SCOPE=project → 反向 opt-in，写入项目级 agent 目录"
   docker exec "$S3A_CONTAINER" bash -lc "rm -f /root/.omo/omo.jsonc; rm -rf '$S3A_PROJECT/.opencode'" >/dev/null 2>&1 || true
-  s3a_start_serve "OMO_V2_AGENT_SCOPE=global"
+  s3a_start_serve "OMO_V2_AGENT_SCOPE=project"
   s3a_wait_plugin 90 || true
   s3a_wait_agents "$work/d.agents.json" 90 "$ids" || true
   fetch_agents "$work/d.agents.json"
   sleep 2
   s3a_plugin_log "$work/d.log"
-  docker exec "$S3A_CONTAINER" bash -lc "ls '$S3A_GLOBAL_AGENTS' 2>/dev/null" > "$work/d.files" 2>/dev/null || true
+  docker exec "$S3A_CONTAINER" bash -lc "ls '$S3A_PROJECT_AGENTS' 2>/dev/null" > "$work/d.files" 2>/dev/null || true
 
   # Leave no agent markdown behind: 1.x gates assert the V2 probe file is absent, and a stale global
   # agent would be picked up by every later serve.
@@ -1183,6 +1493,7 @@ c_last = c_sum[-1] if c_sum else {}
 d_last = d_sum[-1] if d_sum else {}
 
 a_files = read_lines("a.files")
+a_project_files = read_lines("a.project.files")
 c_files = read_lines("c.files")
 d_files = read_lines("d.files")
 md_names = lambda entries: sorted(name[:-3] for name in entries if name.endswith(".md"))
@@ -1208,7 +1519,11 @@ except Exception:
 assertions = {
     "pluginActive": plugin_entry is not None and (plugin_entry.get("state") or {}).get("status") == "active",
     "selftestPassed": selftest_status == "0",
-    "projectScopeFilesWritten": set(md_names(a_files)) == set(NAMES),
+    # Phase A: the default is global; the user's project must stay untouched.
+    "defaultScopeGlobal": a_last.get("scope") == "global",
+    "defaultScopeDirectory": a_last.get("directory") == global_agents_dir,
+    "defaultScopeFilesWritten": set(md_names(a_files)) >= set(NAMES),
+    "defaultScopeDoesNotWriteProject": md_names(a_project_files) == [],
     "allTenDiscovered": all(name in a_agents for name in NAMES),
     "modesCorrect": all(modes_a.get(name) == EXPECTED_MODES[name] for name in NAMES),
     "noDuplicateAgents": len([name for name in NAMES if name in a_agents]) == len(NAMES),
@@ -1218,12 +1533,12 @@ assertions = {
     "disabledAgentNotDiscovered": disabled_agent not in c_agents,
     "disabledReportedRemoved": disabled_agent in (c_last.get("removed") or []),
     "otherNineSurviveDisable": all(name in c_agents for name in NAMES if name != disabled_agent),
-    "globalScopeChosen": d_last.get("scope") == "global",
-    "globalScopeDirectory": d_last.get("directory") == global_agents_dir,
-    # the S0 probe shares the global agent directory, so only our ten names are compared
-    "globalScopeFilesWritten": set(md_names(d_files)) >= set(NAMES),
-    "globalScopeDiscovered": all(name in d_agents for name in NAMES),
-    "globalScopeModesCorrect": all(modes_d.get(name) == EXPECTED_MODES[name] for name in NAMES),
+    # Phase D: OMO_V2_AGENT_SCOPE=project is the reverse opt-in.
+    "projectScopeChosen": d_last.get("scope") == "project",
+    "projectScopeDirectory": d_last.get("directory") == project_agents_dir,
+    "projectScopeFilesWritten": set(md_names(d_files)) == set(NAMES),
+    "projectScopeDiscovered": all(name in d_agents for name in NAMES),
+    "projectScopeModesCorrect": all(modes_d.get(name) == EXPECTED_MODES[name] for name in NAMES),
     "frontmatterUsesSupportedKeys": oracle_frontmatter.startswith("---")
         and "# omo-v2-agent: oracle" in oracle_frontmatter
         and all(f"{key}:" in oracle_frontmatter for key in ("description", "mode", "permission")),
@@ -1235,17 +1550,20 @@ evidence = {
     "serveUrl": serve_url,
     "plugin": {"expectedId": plugin_id, "active": assertions["pluginActive"]},
     "discovery": {
+        "defaultScope": "global",
         "projectScopeDirectory": project_agents_dir,
         "globalScopeDirectory": global_agents_dir,
-        "projectDiscoveredWithoutReload": assertions["allTenDiscovered"],
+        "discoveredWithoutReload": assertions["allTenDiscovered"],
         "note": "V2.1.4 picks the files up during setup; no /api/location/reload and no host restart "
-                "were needed. A project file wins over a global file with the same name.",
+                "were needed. The default scope is global; OMO_V2_AGENT_SCOPE=project opts into the "
+                "location. A project file wins over a global file with the same name.",
     },
     "phaseA": {
         "summary": a_last,
         "agents": [{"id": name, "mode": modes_a.get(name), "description": a_agents.get(name, {}).get("description")}
                    for name in NAMES],
         "files": md_names(a_files),
+        "projectFilesUntouched": md_names(a_project_files),
         "oracleFrontmatter": oracle_frontmatter,
     },
     "phaseB": {"summary": b_last, "agentCount": len(b_agents)},
@@ -1257,7 +1575,7 @@ evidence = {
     },
     "phaseD": {"summary": d_last, "files": md_names(d_files), "modes": modes_d},
     "frontmatterEvidence": {
-        "file": os.path.join(project_agents_dir, "oracle.md"),
+        "file": os.path.join(global_agents_dir, "oracle.md"),
         "frontmatter": oracle_frontmatter,
         "loaded": {key: a_agents.get("oracle", {}).get(key) for key in ("description", "mode", "hidden", "model", "request", "permissions")},
     },
@@ -1269,9 +1587,12 @@ evidence = {
 json.dump(evidence, open(out_path, "w"), indent=2, ensure_ascii=False)
 print(json.dumps({"assertions": assertions,
                   "modes": modes_a,
+                  "phaseA": {"scope": a_last.get("scope"), "directory": a_last.get("directory"),
+                             "files": md_names(a_files), "projectFiles": md_names(a_project_files)},
                   "phaseB": {"written": b_last.get("written"), "skipped": len(b_last.get("skipped") or [])},
                   "phaseC": {"removed": c_last.get("removed"), "files": md_names(c_files)},
-                  "phaseD": {"scope": d_last.get("scope"), "files": md_names(d_files)}},
+                  "phaseD": {"scope": d_last.get("scope"), "directory": d_last.get("directory"),
+                             "files": md_names(d_files)}},
                  indent=2, ensure_ascii=False))
 sys.exit(0 if evidence["passed"] else 1)
 PY
@@ -1283,7 +1604,7 @@ PY
     echo "FAIL: S3a 断言未通过（详见 $result）" >&2
     return 1
   fi
-  echo "OK: S3a 通过（10 个 agent 物化并被 /api/agent 发现，二次 setup 全 skipped，禁用后删除 markdown，global scope 可用）"
+  echo "OK: S3a 通过（默认 global scope 写 10 个 agent 且不污染项目，二次 setup 全 skipped，禁用后删除 markdown，project 反向 opt-in 可用）"
 }
 
 # V1 regression gate. The repository ships one harness but two runtime entries; nothing may make a
@@ -1466,6 +1787,7 @@ main() {
     e2e-s1a) cmd_e2e_s1a "$@" ;;
     e2e-s3a) cmd_e2e_s3a "$@" ;;
     e2e-s2a) cmd_e2e_s2a "$@" ;;
+    e2e-s2b1) cmd_e2e_s2b1 "$@" ;;
     e2e-v1) cmd_e2e_v1 "$@" ;;
     -h|--help|help|"") usage ;;
     *)

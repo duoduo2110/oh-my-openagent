@@ -21,6 +21,12 @@ import type { AgentConfig } from "@opencode-ai/sdk"
 
 import { buildBuiltinAgentConfigs, materializeAgentMarkdowns, V2_BUILTIN_AGENT_NAMES } from "../agents"
 import {
+  globalAgentDirectory,
+  projectAgentDirectory,
+  resolveAgentScopeDirectory,
+  resolveV2AgentScope,
+} from "../agents"
+import {
   AGENT_GENERATED_COMMENT,
   AGENT_MARKER_PREFIX,
   agentMarkerLine,
@@ -141,7 +147,7 @@ check(isManagedAgentMarkdown(rendered, "sisyphus"), "our own file is recognised"
 check(!isManagedAgentMarkdown(rendered, "oracle"), "the marker is per agent name")
 
 // ---------------------------------------------------------------------------------------------
-// 3. Writing: project scope, idempotency, atomicity, deletion of disabled agents only.
+// 3. Writing: explicit project scope, idempotency, atomicity, deletion of disabled agents only.
 // ---------------------------------------------------------------------------------------------
 
 const projectDir = makeTempDir("project")
@@ -175,7 +181,7 @@ const first = await materializeAgentMarkdowns({
   storage,
 })
 const scopeDir = path.join(projectDir, ".opencode", "agent")
-checkEqual(first.scope, "project", "default scope is project")
+checkEqual(first.scope, "project", "explicit project scope is honoured")
 checkEqual(first.directory, scopeDir, "project scope writes under <location>/.opencode/agent")
 checkEqual(first.written.length, 10, "first pass writes all ten files")
 checkEqual(first.skipped.length, 0, "first pass skips nothing")
@@ -225,7 +231,63 @@ checkEqual(managedDisable.removed.includes("metis"), true, "a generated file is 
 checkEqual(readIfExists(path.join(scopeDir, "metis.md")), undefined, "the generated file is really gone")
 
 // ---------------------------------------------------------------------------------------------
-// 4. Global scope: XDG_CONFIG_HOME/opencode/agent, same bytes, no location directory involved.
+// 4. Scope resolution: global by default, project opt-in, and a loud fallback.
+// ---------------------------------------------------------------------------------------------
+
+const scopeHome = makeTempDir("scope-home")
+const scopeEnv = { HOME: scopeHome, XDG_CONFIG_HOME: scopeHome }
+
+checkEqual(resolveV2AgentScope({}), "global", "default scope is global (the project dir belongs to the user's repo)")
+checkEqual(
+  resolveV2AgentScope({ OMO_V2_AGENT_SCOPE: "project" }),
+  "project",
+  "OMO_V2_AGENT_SCOPE=project opts back in",
+)
+checkEqual(resolveV2AgentScope({ OMO_V2_AGENT_SCOPE: "global" }), "global", "explicit global stays global")
+
+const defaultResolution = resolveAgentScopeDirectory({ locationDirectory: projectDir, env: scopeEnv })
+checkEqual(defaultResolution.scope, "global", "the default resolution picks global")
+checkEqual(
+  defaultResolution.directory,
+  globalAgentDirectory(scopeEnv),
+  "global scope resolves to $XDG_CONFIG_HOME/opencode/agent",
+)
+checkEqual(defaultResolution.warnings.length, 0, "a writable global directory warns about nothing")
+check(
+  fs.statSync(defaultResolution.directory).isDirectory(),
+  "the global agent directory is created on demand",
+)
+
+const optInResolution = resolveAgentScopeDirectory({
+  locationDirectory: projectDir,
+  env: { ...scopeEnv, OMO_V2_AGENT_SCOPE: "project" },
+})
+checkEqual(optInResolution.scope, "project", "project opt-in resolution picks project")
+checkEqual(optInResolution.directory, projectAgentDirectory(projectDir), "project scope resolves next to the location")
+
+// A global directory that cannot be created (XDG_CONFIG_HOME is a regular file) must degrade to
+// the project scope with a warning instead of failing setup.
+const blockerHome = makeTempDir("scope-blocked")
+const blockerFile = path.join(blockerHome, "not-a-directory")
+fs.writeFileSync(blockerFile, "occupied", "utf8")
+const fallbackResolution = resolveAgentScopeDirectory({
+  locationDirectory: projectDir,
+  env: { HOME: blockerHome, XDG_CONFIG_HOME: blockerFile },
+})
+checkEqual(fallbackResolution.scope, "project", "an unusable global directory falls back to project scope")
+checkEqual(
+  fallbackResolution.directory,
+  projectAgentDirectory(projectDir),
+  "the fallback writes to the project agent directory",
+)
+check(
+  fallbackResolution.warnings.some((warning) => warning.includes("not writable")),
+  "the fallback is reported as a warning",
+)
+note(`scope: default=${defaultResolution.scope} optIn=${optInResolution.scope} fallback=${fallbackResolution.scope}`)
+
+// ---------------------------------------------------------------------------------------------
+// 5. Explicit global scope: XDG_CONFIG_HOME/opencode/agent, same bytes, no location directory.
 // ---------------------------------------------------------------------------------------------
 
 const globalHome = makeTempDir("global-home")
@@ -250,7 +312,7 @@ check(!path.join(globalDir, "oracle.md").startsWith(projectDir), "global scope n
 // Report
 // ---------------------------------------------------------------------------------------------
 
-for (const dir of [scratch, projectDir, globalHome]) {
+for (const dir of [scratch, projectDir, globalHome, scopeHome, blockerHome]) {
   fs.rmSync(dir, { recursive: true, force: true })
 }
 
@@ -260,4 +322,4 @@ if (failures.length > 0) {
   process.exit(1)
 }
 
-note(`OK: ${checks} checks passed (agents=10, idempotent, project+global scope, managed-file deletion)`)
+note(`OK: ${checks} checks passed (agents=10, idempotent, global default + project opt-in, managed-file deletion)`)

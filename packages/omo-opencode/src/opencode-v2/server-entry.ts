@@ -3,6 +3,7 @@ import * as Plugin from "@opencode/plugin/promise/plugin"
 import { log } from "../shared/logger"
 import { createOpenCodeV2Runtime } from "./adapter"
 import { materializeOpenCodeV2Agents } from "./agents"
+import { registerOpenCodeV2Hooks } from "./hooks"
 import { runOpenCodeV2Probe } from "./probe"
 import { OPENCODE_V2_NOTICE_MESSAGE } from "./startup-notice"
 import { registerOpenCodeV2Tools } from "./tools"
@@ -20,6 +21,8 @@ export const opencodeV2Server = Plugin.define({
     // S2a: V1 runtime (managers/hooks/tools) assembled over a V2 context shim.
     const runtime = await createOpenCodeV2Runtime(context)
     log("[opencode-v2] runtime assembled", { hasRuntime: Boolean(runtime) })
+    // S2b: bridge V2 domain hooks onto the V1 hook handlers.
+    await registerOpenCodeV2Hooks(context, runtime)
     // S3a: built-in agents materialized as markdown (V2 has no agent add()).
     await materializeOpenCodeV2Agents(context)
 
