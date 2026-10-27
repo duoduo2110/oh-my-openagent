@@ -105,9 +105,11 @@ export function createSessionTodoStore(storageInput: unknown): SessionTodoStore 
   const keyOf = (sessionID: string): string => `${TODO_STORAGE_PREFIX}${sessionID}`
 
   const readFromStorage = async (sessionID: string): Promise<TodoInfo[] | undefined> => {
-    if (!canStore) return undefined
+    if (!canStore || storage === undefined) return undefined
+    const storageGet = storage["get"]
+    if (typeof storageGet !== "function") return undefined
     try {
-      const value = await Reflect.apply(storage!["get"] as (...args: unknown[]) => unknown, storage, [keyOf(sessionID)])
+      const value = await Reflect.apply(storageGet, storage, [keyOf(sessionID)])
       const record = asRecord(value)
       const list = record === undefined ? value : readArray(record, "todos")
       if (!Array.isArray(list)) return record === undefined && value === undefined ? undefined : []
@@ -133,9 +135,11 @@ export function createSessionTodoStore(storageInput: unknown): SessionTodoStore 
     writes += 1
     const snapshot = todos.map((entry) => ({ ...entry }))
     memory.set(sessionID, snapshot)
-    if (!canStore) return
+    if (!canStore || storage === undefined) return
+    const storageSet = storage["set"]
+    if (typeof storageSet !== "function") return
     try {
-      await Reflect.apply(storage!["set"] as (...args: unknown[]) => unknown, storage, [
+      await Reflect.apply(storageSet, storage, [
         keyOf(sessionID),
         { todos: snapshot, updatedAt: new Date().toISOString() },
       ])

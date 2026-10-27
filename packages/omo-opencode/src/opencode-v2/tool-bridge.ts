@@ -33,12 +33,27 @@ export type CollisionPolicy = "override" | "skip"
  * `grep`/`glob` are ours: the V1 implementations carry the limits, formatters and include semantics
  * the port depends on, so they replace the host built-ins. `edit` and `task` stay the host's until a
  * later stage validates the V1 equivalents, so we skip them instead of fighting the host.
+ *
+ * The B group (S1b: `session_*`, `skill`, `skill_mcp`, `look_at`, the task write pair and
+ * `interactive_bash`) owns its names outright — no V2 built-in carries them — and `override` says
+ * exactly that: if a future host revision claims one of them, the OMO surface wins, because these
+ * are the definitions the V1 engine and its prompts are written against.
  */
 export const COLLISION_POLICY: Readonly<Record<string, CollisionPolicy>> = {
   grep: "override",
   glob: "override",
   edit: "skip",
   task: "skip",
+  session_list: "override",
+  session_read: "override",
+  session_search: "override",
+  session_info: "override",
+  skill: "override",
+  skill_mcp: "override",
+  look_at: "override",
+  task_create: "override",
+  task_update: "override",
+  interactive_bash: "override",
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -69,6 +84,24 @@ export type V2ToolInfoLike = {
   readonly id?: string
   readonly description?: string
 }
+
+/**
+ * The slice of `ctx.permission` the bridge needs. `PermissionDomain.assert` (2.1.4) evaluates the
+ * session's rules and, when approval is needed, prompts and waits; a deny rejects. That is the
+ * direct V2 counterpart of the V1 `ctx.ask()`, so the bridge maps one onto the other instead of
+ * allowing everything.
+ */
+export type V2PermissionLike = {
+  readonly assert?: (input: {
+    readonly sessionID: string
+    readonly agent?: string
+    readonly action: string
+    readonly resources: readonly string[]
+    readonly save?: readonly string[]
+    readonly metadata?: Record<string, unknown>
+  }) => Promise<void>
+}
+
 
 export type V2ToolRegistration = {
   readonly name: string
@@ -105,6 +138,7 @@ export type BridgeRegistrationResult = {
 
 let bridgeDirectory: string | undefined
 let bridgeSessionID: string | undefined
+let bridgePermission: V2PermissionLike | undefined
 
 export function setToolBridgeDirectory(directory: string | undefined): void {
   bridgeDirectory = directory
@@ -112,6 +146,20 @@ export function setToolBridgeDirectory(directory: string | undefined): void {
 
 export function getToolBridgeDirectory(): string | undefined {
   return bridgeDirectory
+}
+
+/**
+ * Installs the host's permission domain so a V1 `ctx.ask()` can become
+ * `ctx.permission.assert()`. Setup owns the context, tools only receive a `ToolContext`, so the
+ * domain has to travel through this module the same way the directory does.
+ */
+export function setToolBridgePermission(permission: unknown): void {
+  const candidate = permission as V2PermissionLike | undefined
+  bridgePermission = candidate !== null && typeof candidate === "object" ? candidate : undefined
+}
+
+export function getToolBridgePermission(): V2PermissionLike | undefined {
+  return bridgePermission
 }
 
 /**
@@ -125,6 +173,7 @@ export function getToolBridgeSessionID(): string | undefined {
 export function _resetToolBridgeStateForTesting(): void {
   bridgeDirectory = undefined
   bridgeSessionID = undefined
+  bridgePermission = undefined
   warnedFeatures.clear()
 }
 
@@ -154,9 +203,15 @@ function resolveDirectory(v2ctx: V2ToolContextLike): string {
  * (V1 expects an `AbortSignal`, which V2 exposes as `signal`), `directory`/`worktree` (from the setup
  * location).
  *
+ * `ask()` maps onto `ctx.permission.assert()` (installed by the setup through
+ * `setToolBridgePermission`): V1 `permission` -> `action`, `patterns` -> `resources`,
+ * `always` -> `save`, `metadata` -> `metadata`. A denial is rethrown — V1 semantics — because a
+ * permission gate that answers "allow" to a denial is worse than no gate. Only when the host has no
+ * permission domain, or the call carries no session, is the request allowed, and that is logged once
+ * per tool so it cannot pass unnoticed.
+ *
  * Degraded, warned once per tool:
  *   - `metadata()` — V2 has no equivalent sink here, so it stays a no-op returning nothing.
- *   - `ask()`     — V2 permission prompts are not wired in this stage, so the request is allowed.
  */
 export function adaptContext(toolName: string, v2ctx: V2ToolContextLike): V1ToolContext {
   const directory = resolveDirectory(v2ctx)
@@ -176,8 +231,29 @@ export function adaptContext(toolName: string, v2ctx: V2ToolContextLike): V1Tool
       warnOnce(toolName, "metadata", "metadata() has no V2 sink in S1; the update was dropped")
     },
     ask: async (input: unknown): Promise<void> => {
-      void input
-      warnOnce(toolName, "ask", "permission prompts are not wired in S1; the request was allowed")
+      const request = toAskRequest(input)
+      if (request === undefined) return
+
+      const assert = bridgePermission?.assert
+      if (typeof assert !== "function") {
+        warnOnce(toolName, "ask", "no ctx.permission domain on this host; the request was allowed")
+        return
+      }
+      const sessionID = v2ctx.sessionID
+      if (typeof sessionID !== "string" || sessionID.length === 0) {
+        warnOnce(toolName, "ask", "the call carried no session; the permission request was allowed")
+        return
+      }
+
+      // A denial rejects with the host's own reason; let it reach the tool caller unchanged.
+      await assert({
+        sessionID,
+        ...(typeof v2ctx.agent === "string" && v2ctx.agent.length > 0 ? { agent: v2ctx.agent } : {}),
+        action: request.permission,
+        resources: request.patterns,
+        ...(request.always.length > 0 ? { save: request.always } : {}),
+        ...(request.metadata === undefined ? {} : { metadata: request.metadata }),
+      })
     },
   }
 
@@ -185,6 +261,35 @@ export function adaptContext(toolName: string, v2ctx: V2ToolContextLike): V1Tool
     return Object.assign(adapted, { callID: v2ctx.id, callId: v2ctx.id }) as V1ToolContext
   }
   return adapted as V1ToolContext
+}
+
+type AskRequest = {
+  readonly permission: string
+  readonly patterns: readonly string[]
+  readonly always: readonly string[]
+  readonly metadata?: Record<string, unknown>
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is string => typeof entry === "string")
+}
+
+/** V1 `AskInput` -> the four fields `ctx.permission.assert()` needs. Unknown shapes are ignored. */
+function toAskRequest(input: unknown): AskRequest | undefined {
+  if (typeof input !== "object" || input === null) return undefined
+  const record = input as Record<string, unknown>
+  const permission = record["permission"]
+  if (typeof permission !== "string" || permission.length === 0) return undefined
+  const metadata = record["metadata"]
+  return {
+    permission,
+    patterns: stringList(record["patterns"]),
+    always: stringList(record["always"]),
+    ...(typeof metadata === "object" && metadata !== null && !Array.isArray(metadata)
+      ? { metadata: metadata as Record<string, unknown> }
+      : {}),
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

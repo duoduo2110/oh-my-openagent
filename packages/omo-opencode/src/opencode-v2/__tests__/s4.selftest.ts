@@ -218,8 +218,14 @@ async function runShimChecks(): Promise<void> {
     directory: projectDir,
   }) as unknown as Record<string, Record<string, (input?: unknown) => Promise<{ data?: unknown }>>>
 
+  const call = (domain: string, method: string) => {
+    const target = client[domain]?.[method]
+    if (target === undefined) throw new Error(`client.${domain}.${method} is missing`)
+    return target
+  }
+
   // ---- session.messages ------------------------------------------------------------------
-  const messagesResponse = await client["session"]!["messages"]!({ path: { id: SESSION_A } })
+  const messagesResponse = await call("session", "messages")({ path: { id: SESSION_A } })
   const messages = (messagesResponse.data ?? []) as Array<{ info: Record<string, unknown>; parts: Array<Record<string, unknown>> }>
   record("session.messages is not empty", messages.length > 0, `${messages.length} messages`)
 
@@ -266,7 +272,7 @@ async function runShimChecks(): Promise<void> {
   )
 
   // ---- session.todo: write -> read round trip ---------------------------------------------
-  const emptyTodos = (await client["session"]!["todo"]!({ path: { id: SESSION_A } })).data as unknown[]
+  const emptyTodos = (await call("session", "todo")({ path: { id: SESSION_A } })).data as unknown[]
   record("session.todo starts empty (no producer yet)", Array.isArray(emptyTodos) && emptyTodos.length === 0, JSON.stringify(emptyTodos))
 
   const captured = await captureSessionTodos({
@@ -275,7 +281,7 @@ async function runShimChecks(): Promise<void> {
     tool: "todowrite",
     input: { todos: [{ content: "write the test", status: "in_progress", priority: "high" }, { content: "ship it", status: "pending", priority: "low" }] },
   })
-  const storedTodos = (await client["session"]!["todo"]!({ path: { id: SESSION_A } })).data as Array<Record<string, unknown>>
+  const storedTodos = (await call("session", "todo")({ path: { id: SESSION_A } })).data as Array<Record<string, unknown>>
   const storageKey = `${TODO_STORAGE_PREFIX}${SESSION_A}`
   record(
     "session.todo read/write round trip through ctx.storage",
@@ -285,7 +291,7 @@ async function runShimChecks(): Promise<void> {
       && host.storageData.has(storageKey),
     `captured=${String(captured)} read=${JSON.stringify(storedTodos)} key=${String(host.storageData.has(storageKey))}`,
   )
-  const otherSession = (await client["session"]!["todo"]!({ path: { id: SESSION_B } })).data as unknown[]
+  const otherSession = (await call("session", "todo")({ path: { id: SESSION_B } })).data as unknown[]
   record(
     "session.todo is partitioned per session",
     Array.isArray(otherSession) && otherSession.length === 0,
@@ -298,7 +304,7 @@ async function runShimChecks(): Promise<void> {
   )
 
   // ---- session.status ---------------------------------------------------------------------
-  const statusResponse = await client["session"]!["status"]!()
+  const statusResponse = await call("session", "status")()
   const status = (statusResponse.data ?? {}) as Record<string, { type: string }>
   record(
     "session.status derives busy AND idle from active()+list()",
@@ -310,14 +316,14 @@ async function runShimChecks(): Promise<void> {
   // the live source; the registry must win over the list() idle default.
   const { noteSessionEvent, resetSessionStatuses } = await import("../adapter/status-registry")
   noteSessionEvent({ id: "evt_1", type: "session.status", data: { sessionID: SESSION_B, status: { type: "busy" } } })
-  const registryStatus = (await client["session"]!["status"]!()).data as Record<string, { type: string }>
+  const registryStatus = (await call("session", "status")()).data as Record<string, { type: string }>
   record(
     "session.status uses the event-stream registry when the host has no active()",
     registryStatus[SESSION_B]?.type === "busy" && registryStatus[SESSION_A]?.type === "busy",
     JSON.stringify(registryStatus),
   )
   noteSessionEvent({ id: "evt_2", type: "session.idle", data: { sessionID: SESSION_B } })
-  const idleAgain = (await client["session"]!["status"]!()).data as Record<string, { type: string }>
+  const idleAgain = (await call("session", "status")()).data as Record<string, { type: string }>
   record(
     "session.status follows session.idle back to idle",
     idleAgain[SESSION_B]?.type === "idle",
@@ -326,7 +332,7 @@ async function runShimChecks(): Promise<void> {
   resetSessionStatuses()
 
   // ---- config.get -------------------------------------------------------------------------
-  const configResponse = await client["config"]!["get"]!()
+  const configResponse = await call("config", "get")()
   const config = (configResponse.data ?? {}) as Record<string, unknown>
   const provider = config["provider"] as Record<string, { models?: Record<string, unknown> }> | undefined
   const agents = config["agent"] as Record<string, unknown> | undefined
@@ -347,7 +353,7 @@ async function runShimChecks(): Promise<void> {
   )
 
   // ---- app.skills -------------------------------------------------------------------------
-  const skills = (await client["app"]!["skills"]!()).data as Array<Record<string, unknown>>
+  const skills = (await call("app", "skills")()).data as Array<Record<string, unknown>>
   record(
     "app.skills lists the host skills",
     skills.length === 1 && skills[0]?.["name"] === "omo-skill" && skills[0]?.["id"] === undefined,
@@ -355,7 +361,7 @@ async function runShimChecks(): Promise<void> {
   )
 
   // ---- session.summarize ------------------------------------------------------------------
-  const summarized = (await client["session"]!["summarize"]!({ path: { id: SESSION_A } })).data as Record<string, unknown>
+  const summarized = (await call("session", "summarize")({ path: { id: SESSION_A } })).data as Record<string, unknown>
   record(
     "session.summarize maps to compact() and converts the receipt",
     host.compactCalls.length === 1

@@ -56,6 +56,11 @@ S3A_EXPECTED_AGENTS="sisyphus hephaestus oracle librarian explore multimodal-loo
 # S3b config-domain projection: its own throwaway project, so the assertions never depend on S3a's.
 S3B_CONTAINER="omo-v2-serve"
 S3B_PROJECT="/tmp/omo-v2-s3b-project"
+# S5 TUI: the TUI host reads its plugin list from `~/.config/opencode/cli.json` (not
+# `opencode.json`, which only the server reads), and loads the package's `./tui` export.
+TUI_PLUGIN_DIR="${OMO_V2_PLUGIN_DIR:-/root/.config/opencode/omo-v2-plugin}"
+TUI_RUN_SECONDS="${OMO_V2_TUI_SECONDS:-30}"
+TUI_SESSION_ID="${OMO_V2_TUI_SESSION:-ses_omo_v2_tui_e2e}"
 
 compose() { docker compose -f "$COMPOSE_FILE" -p "$PROJECT" "$@"; }
 
@@ -78,6 +83,9 @@ usage() {
                 证据落 .slim/v2-evidence/s0-<ts>.json
   e2e-s1a       V1 -> V2 工具桥接（S1a）：A 组工具进入 ctx.tool.list()、grep/glob 覆盖内置、
                 zod 直传、无 schema 错误，并跑桥接自测；证据落 .slim/v2-evidence/s1a-<ts>.json
+  e2e-s1b       B 组 10 个工具桥接（S1b）：session_*/skill/skill_mcp/look_at/task_create/task_update/
+                interactive_bash 进 ctx.tool.list()，逐工具注册行 + tool.list() 增量，并跑 S1b 自测；
+                证据落 .slim/v2-evidence/s1b-<ts>.json
   e2e-s2a       V1 运行时装配到 V2 宿主（S2a）：真实 serve 容器的插件日志出现
                 [omo-v2] runtime assembled hooks/tools/managers/agents 计数，且适配器自测通过；
                 证据落 .slim/v2-evidence/s2a-<ts>.json
@@ -92,6 +100,9 @@ usage() {
   e2e-s3b       V1 配置投影到 V2 配置域（S3b）：/api/mcp 出现 4 个内置 MCP、/api/command 出现 6 个内置命令、
                 /api/skill 含随包 18 个 skill、tools/permission 落 agent frontmatter、不支持域有日志；
                 证据落 .slim/v2-evidence/s3b-<ts>.json
+  e2e-tui       TUI 移植门禁（S5）：伪终端内启动真实 opencode2 TUI，断言插件 ./tui 导出被 setup、
+                sidebar/prompt footer slot 注册并渲染、toast 可见、退出后全部释放；
+                证据落 .slim/v2-evidence/e2e-tui-<ts>.{json,screen.log,host.log,plugin.log}
   e2e-v1        V1 回归门禁：真实 OpenCode 1.x CLI 加载本仓库插件，断言 V1 装配成功且无任何 V2 提示/探针，
                 证据落 .slim/v2-evidence/e2e-v1-<ts>.log
 
@@ -135,6 +146,51 @@ cat > /root/.config/opencode/opencode.json <<'JSON'
 }
 JSON
 cat /root/.config/opencode/opencode.json"
+}
+
+# S5: the same staged directory, but with a `./tui` export and registered as the TUI plugin.
+# The TUI host reads `~/.config/opencode/cli.json` (opencode.json is server-only) and resolves
+# the package's `./tui` export from there.
+stage_plugin_tui() {
+  run_v2 bash -lc "set -e
+mkdir -p '${TUI_PLUGIN_DIR}' /root/.config/opencode
+rm -rf '${TUI_PLUGIN_DIR}/index.js' '${TUI_PLUGIN_DIR}/tui.js' '${TUI_PLUGIN_DIR}/skills'
+cp '${REPO_DIST_ENTRY}' '${TUI_PLUGIN_DIR}/index.js'
+cp /repo/dist/tui.js '${TUI_PLUGIN_DIR}/tui.js'
+if [ -d '${REPO_SKILLS_DIR}' ]; then ln -sfn '${REPO_SKILLS_DIR}' '${TUI_PLUGIN_DIR}/skills'; fi
+cat > '${TUI_PLUGIN_DIR}/package.json' <<'JSON'
+{
+  \"name\": \"oh-my-openagent\",
+  \"version\": \"0.0.0\",
+  \"type\": \"module\",
+  \"main\": \"index.js\",
+  \"exports\": { \".\": \"./index.js\", \"./server\": \"./index.js\", \"./tui\": \"./tui.js\" }
+}
+JSON
+cat > /root/.config/opencode/opencode.json <<'JSON'
+{
+  \"\$schema\": \"https://opencode.ai/config.json\",
+  \"plugins\": [
+    { \"package\": \"${TUI_PLUGIN_DIR}\" }
+  ]
+}
+JSON
+cat > /root/.config/opencode/cli.json <<'JSON'
+{
+  \"\$schema\": \"https://opencode.ai/v2/cli.json\",
+  \"plugins\": [\"file:${TUI_PLUGIN_DIR}\"]
+}
+JSON
+# The TUI installs the plugins it is told about into the config directory with npm. Pinning
+# that manifest to exactly this plugin keeps the reconcile step offline and idempotent — a
+# stale entry here makes every start re-install and never reach setup.
+cat > /root/.config/opencode/package.json <<'JSON'
+{
+  \"dependencies\": { \"oh-my-openagent\": \"file:${TUI_PLUGIN_DIR}\" }
+}
+JSON
+cd /root/.config/opencode && timeout 240 npm install --no-audit --no-fund --ignore-scripts >/tmp/omo-v2-tui-npm.log 2>&1 || cat /tmp/omo-v2-tui-npm.log
+cat /root/.config/opencode/cli.json"
 }
 
 # 1 when the id shows up in /api/plugin's data[].
@@ -298,6 +354,11 @@ cmd_build_index() {
   mkdir -p "$ROOT/$E2E_BUNDLE_DIR"
   run_v2 bun build packages/omo-opencode/src/index.ts \
     --outdir "$E2E_BUNDLE_DIR" --target bun --format esm "$@"
+  # The TUI entry is a separate bundle (as in `script/build-nodes.ts`): OpenTUI stays
+  # external because the host process owns the renderer.
+  run_v2 bun build packages/omo-opencode/src/tui.ts \
+    --outdir dist --target bun --format esm \
+    --external @opentui/core --external @opentui/keymap --external @opentui/solid "$@"
 }
 
 cmd_e2e_load() {
@@ -398,6 +459,248 @@ json.dump(
     return 1
   fi
   echo "OK: 插件 ${PLUGIN_ID_EXPECTED} 已在 OpenCode V2 中加载，startup-notice 已出现"
+}
+
+# S5 TUI gate: a real `opencode2` TUI process loads the plugin's `./tui` export, claims its
+# slots (sidebar + prompt footer), draws the startup toast on the terminal, and releases every
+# registration when the process is asked to stop. Pixel-level layout is out of scope here; the
+# screen capture is kept as evidence next to the assertions.
+cmd_e2e_tui() {
+  mkdir -p "$EVIDENCE_DIR"
+  local ts rc=0
+  ts="$(date +%Y%m%d-%H%M%S)"
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "==> 镜像缺失，先构建 $IMAGE"
+    compose build
+  fi
+
+  echo "==> 构建 V2 产物 (dist/index.js + dist/tui.js)"
+  cmd_build_index
+
+  echo "==> 写入插件目录与 TUI 插件清单: $TUI_PLUGIN_DIR"
+  stage_plugin_tui | sed 's/^/    /'
+
+  echo "==> 伪终端内启动真实 TUI (画面 160x45, session ${TUI_SESSION_ID})"
+  # A pty is what makes the real TUI draw: the session view only exists at a usable width, and
+  # `sidebar.content` is part of that view. The driver stops as soon as the plugin reports a
+  # registration and a render, then asks the process to quit — which is what exercises cleanup.
+  local inner
+  inner=$(cat <<'INNER'
+set -u
+TS="${TS:?}"
+PLUGIN_DIR="${PLUGIN_DIR:?}"
+RUN_SECONDS="${RUN_SECONDS:?}"
+SESSION_ID="${SESSION_ID:?}"
+SCR=/tmp/omo-v2-tui-screen.log
+HOSTLOG=/tmp/omo-v2-tui-host.log
+PLUGLOG=/tmp/oh-my-opencode.log
+rm -f "$SCR" "$HOSTLOG" "$PLUGLOG"
+# The TUI opens whichever session it is handed, and an id it created itself is the only one the
+# sidebar is guaranteed to render for. `--session` accepts only `ses_...` ids.
+SESSION_ID="${SESSION_ID:?}"
+CREATED_ID=$(timeout 120 opencode2 api session.create -d '{"title":"omo v2 tui e2e"}' 2>/dev/null | python3 -c 'import json,sys
+raw = sys.stdin.read()
+start = raw.find("{")
+print(json.loads(raw[start:])["data"]["id"] if start >= 0 else "")' 2>/dev/null || true)
+if [ -z "${CREATED_ID:-}" ]; then
+  echo "    ! 无法通过 api 创建 session，沿用 $SESSION_ID"
+  SESSION_ID="$SESSION_ID"
+else
+  SESSION_ID="$CREATED_ID"
+fi
+echo "    session=$SESSION_ID"
+
+PLUGIN_DIR="$PLUGIN_DIR" SCR="$SCR" HOSTLOG="$HOSTLOG" RUN_SECONDS="$RUN_SECONDS" SESSION_ID="$SESSION_ID" python3 - <<'PYDRIVER'
+import fcntl, os, pty, re, select, signal, struct, termios, time
+
+scr = os.environ["SCR"]
+hostlog = os.environ["HOSTLOG"]
+seconds = int(os.environ["RUN_SECONDS"])
+sid = os.environ["SESSION_ID"]
+log_path = "/tmp/oh-my-opencode.log"
+
+args = ["opencode2", "--print-logs", "--log-level", "debug", "--session", sid]
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm-256color"
+    os.environ["HOME"] = "/root"
+    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 45, 160, 0, 0))
+    # `--print-logs` writes the host log to stderr; sending that to a file keeps the pty (and so
+    # the screen capture) free of log lines.
+    log_fd = os.open(hostlog, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    os.dup2(log_fd, 2)
+    try:
+        os.execvp(args[0], args)
+    finally:
+        os._exit(127)
+
+out = b""
+
+
+def pump():
+    """Read whatever the pty produced; False when the child closed it."""
+    r, _, _ = select.select([fd], [], [], 0.3)
+    if not r:
+        return True
+    try:
+        data = os.read(fd, 65536)
+    except OSError:
+        return False
+    if not data:
+        return False
+    global out
+    out += data
+    return True
+
+
+def read_log():
+    try:
+        return open(log_path, "r", errors="replace").read()
+    except OSError:
+        return ""
+
+
+deadline = time.time() + seconds
+registered_at = None
+rendered = False
+while time.time() < deadline:
+    if not pump():
+        break
+    log = read_log()
+    if registered_at is None and "[opencode-v2] tui registered" in log:
+        registered_at = time.time()
+    if "[tui-sidebar] V2 view rendered" in log:
+        rendered = True
+    if rendered and registered_at is not None and time.time() - registered_at > 12:
+        break
+    if registered_at is not None and time.time() - registered_at > 20:
+        break
+
+registered = registered_at is not None
+cleanup = "[opencode-v2] tui disposed" in read_log()
+
+# Quit the way a user does (ctrl+c); SIGTERM is the fallback when that does not take.
+exited = False
+try:
+    os.write(fd, b"\x03")
+except OSError:
+    pass
+stop_at = time.time() + 10
+while time.time() < stop_at:
+    if not pump():
+        exited = True
+        break
+    if os.waitpid(pid, os.WNOHANG)[0] != 0:
+        exited = True
+        break
+if not exited:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    stop_at = time.time() + 8
+    while time.time() < stop_at:
+        if not pump():
+            break
+
+try:
+    os.waitpid(pid, os.WNOHANG)
+except ChildProcessError:
+    pass
+
+text = re.sub(
+    r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\",
+    "",
+    out.decode("utf-8", "replace"),
+)
+open(scr, "w").write(text)
+log = read_log()
+print(
+    "    tui registered:",
+    registered,
+    "sidebar rendered:",
+    rendered,
+    "cleanup:",
+    cleanup or "[opencode-v2] tui disposed" in log,
+)
+PYDRIVER
+
+cp "$SCR" "/evidence/e2e-tui-$TS.screen.log" 2>/dev/null || true
+cp "$HOSTLOG" "/evidence/e2e-tui-$TS.host.log" 2>/dev/null || true
+cp "$PLUGLOG" "/evidence/e2e-tui-$TS.plugin.log" 2>/dev/null || true
+
+ok=0
+: > /tmp/omo-v2-tui-results.txt
+present() {
+  if grep -qF -- "$3" "$2" 2>/dev/null; then
+    echo "PASS $1" | tee -a /tmp/omo-v2-tui-results.txt
+  else
+    echo "FAIL $1 ($3)" | tee -a /tmp/omo-v2-tui-results.txt
+    ok=1
+  fi
+}
+absent() {
+  if grep -qF -- "$3" "$2" 2>/dev/null; then
+    echo "FAIL $1 ($3)" | tee -a /tmp/omo-v2-tui-results.txt
+    ok=1
+  else
+    echo "PASS $1" | tee -a /tmp/omo-v2-tui-results.txt
+  fi
+}
+
+present "tui-entry-loaded"      "$HOSTLOG" "stage=setup plugin=oh-my-openagent:tui"
+present "sidebar-slot-claimed"  "$PLUGLOG" "[tui-sidebar] V2 slot claimed"
+present "sidebar-slot-rendered" "$PLUGLOG" "[tui-sidebar] V2 view rendered"
+present "btw-controls"          "$PLUGLOG" "[btw-side] V2 controls registered"
+present "startup-toast-drawn"   "$SCR"     "support is being ported"
+present "sidebar-visible"       "$SCR"     "Models"
+# The plugin logger buffers for 500ms and the process is gone by then, so the host's own
+# cleanup record is the durable evidence that the entry's cleanup ran.
+present "cleanup-ran"           "$HOSTLOG" "stage=cleanup plugin=oh-my-openagent:tui"
+absent  "no-module-rejection"   "$HOSTLOG" "Invalid V2 TUI plugin module"
+absent  "no-sidebar-failure"    "$PLUGLOG" "tui sidebar registration failed"
+absent  "no-btw-failure"        "$PLUGLOG" "tui btw-side registration failed"
+
+python3 - "$TS" "$ok" "$PLUGIN_DIR" <<'PYJSON'
+import json, sys
+
+ts, ok, plugin_dir = sys.argv[1:4]
+results = [line.strip() for line in open("/tmp/omo-v2-tui-results.txt") if line.strip()]
+base = f"/evidence/e2e-tui-{ts}"
+json.dump(
+    {
+        "pluginDir": plugin_dir,
+        "assertionPassed": ok == "0",
+        "assertions": results,
+        "screenLog": base + ".screen.log",
+        "hostLog": base + ".host.log",
+        "pluginLog": base + ".plugin.log",
+    },
+    open(base + ".json", "w"),
+    indent=2,
+    ensure_ascii=False,
+)
+PYJSON
+
+echo "==> 证据: .slim/v2-evidence/e2e-tui-$TS.json"
+[ "$ok" -eq 0 ]
+INNER
+)
+  # shellcheck disable=SC2086
+  compose run --rm -T --no-deps \
+    -e "TS=$ts" \
+    -e "PLUGIN_DIR=$TUI_PLUGIN_DIR" \
+    -e "RUN_SECONDS=$TUI_RUN_SECONDS" \
+    -e "SESSION_ID=$TUI_SESSION_ID" \
+    -v "$EVIDENCE_DIR:/evidence" \
+    v2 bash -lc "$inner" || rc=$?
+
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL: TUI e2e 断言未全部通过（见 .slim/v2-evidence/e2e-tui-${ts}.*）" >&2
+    return 1
+  fi
+  echo "OK: 真实 TUI 进程加载了插件 ./tui 导出，slot/keymap 注册与清理均已验证"
 }
 
 # S0 host probe: proves setup cardinality, plain-JSON-Schema tool acceptance, agent markdown
@@ -830,6 +1133,270 @@ PY
     return 1
   fi
   echo "OK: S1a 通过（A 组 7 个工具 + 探针在 tool.list()，grep/glob 覆盖内置，zod 直传，自测通过）"
+}
+
+
+# S1b acceptance: the ten B-group tools are bridged onto the V2 host and *answer*.
+#
+# Two independent probes, both required:
+#   1. a real OpenCode 2 serve container whose plugin log carries, for every one of the ten tools,
+#      a `[omo-v2] tool registered <name>` line, the name in the `[omo-v2] tools` list, its V1
+#      description prefix in `[omo-v2] tool descriptions`, the name in the `[omo-v2] tool list
+#      delta` `added` set, and the `requires tmux` note for `interactive_bash`;
+#   2. the S1b selftest, which calls every tool for real against a fake V2 host (two sessions read
+#      back, a skill listed, task_create -> task_update read back through the same store, the
+#      no-tmux error path) and asserts each answer is an object with non-empty content.
+cmd_e2e_s1b() {
+  mkdir -p "$EVIDENCE_DIR"
+  local ts api_json log_file plugin_log selftest_log result_file status=1 selftest_status=1 verdict=0
+  ts="$(date +%Y%m%d-%H%M%S)"
+  api_json="$EVIDENCE_DIR/s1b-${ts}.plugin.json"
+  log_file="$EVIDENCE_DIR/s1b-${ts}.serve.log"
+  plugin_log="$EVIDENCE_DIR/s1b-${ts}.plugin.log"
+  selftest_log="$EVIDENCE_DIR/s1b-${ts}.selftest.log"
+  result_file="$EVIDENCE_DIR/s1b-${ts}.json"
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "==> 镜像缺失，先构建 $IMAGE"
+    compose build
+  fi
+
+  echo "==> 构建 V2 插件产物 (dist/index.js)"
+  cmd_build_index
+
+  echo "==> 写入插件目录与 V2 配置: $PLUGIN_DIR"
+  stage_plugin | sed 's/^/    /'
+
+  echo "==> 启动 serve 容器 (宿主 127.0.0.1:${HOST_PORT} -> 4096)"
+  compose rm -sf serve >/dev/null 2>&1 || true
+  # One clean plugin log per run so a stale registration line can never satisfy the assertions.
+  run_v2 bash -lc "rm -f '${PLUGIN_LOG_FILE}'" >/dev/null 2>&1 || true
+  compose up -d --no-build serve
+
+  local tmp deadline
+  tmp="$(mktemp)"
+  deadline=$(( $(date +%s) + 90 ))
+  while :; do
+    curl -fsS --max-time 3 -u "${SERVE_USER}:${SERVE_PASSWORD}" \
+      "$SERVE_URL/api/plugin" -o "$tmp" 2>/dev/null || true
+    if [ -s "$tmp" ] && api_has_plugin "$tmp"; then
+      status=0
+      break
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "!!! 90s 内 /api/plugin 未出现插件 ${PLUGIN_ID_EXPECTED}" >&2
+      break
+    fi
+    sleep 3
+  done
+  cp "$tmp" "$api_json" 2>/dev/null || true
+  rm -f "$tmp"
+
+  # Give the logger's 500ms flush timer a moment, then snapshot the plugin log.
+  sleep 2
+  docker exec omo-v2-serve bash -lc "cat '${PLUGIN_LOG_FILE}' 2>/dev/null" > "$plugin_log" 2>/dev/null || true
+  compose logs --no-color --timestamps serve > "$log_file" 2>&1 || true
+
+  echo "==> B 组自测（10 个工具各做一次真实调用）"
+  set +e
+  timeout 300 docker compose -f "$COMPOSE_FILE" -p "$PROJECT" run --rm -T --no-deps v2 \
+    bun packages/omo-opencode/src/opencode-v2/__tests__/s1b.selftest.ts > "$selftest_log" 2>&1
+  selftest_status=$?
+  set -e
+  tail -3 "$selftest_log" | sed 's/^/    /'
+
+  python3 - "$plugin_log" "$api_json" "$selftest_status" "$result_file" "$SERVE_URL" \
+    "$PLUGIN_ID_EXPECTED" "$selftest_log" <<'PY' || verdict=$?
+import datetime
+import json
+import sys
+
+(plugin_log_path, plugins_path, selftest_status, out_path, serve_url,
+ plugin_id, selftest_log_path) = sys.argv[1:8]
+
+EXPECTED_B = [
+    "session_list", "session_read", "session_search", "session_info",
+    "skill", "skill_mcp", "look_at", "task_create", "task_update", "interactive_bash",
+]
+REQUIRED_A = ["grep", "glob", "task_get", "task_list", "create_goal", "update_goal", "get_goal"]
+DESCRIPTION_PREFIXES = {
+    "session_list": "List all OpenCode sessions with optional filtering.",
+    "session_read": "Read messages and history from an OpenCode session.",
+    "session_search": "Search for content within OpenCode session messages.",
+    "session_info": "Get metadata and statistics about an OpenCode session.",
+    "skill": "Load a skill or execute a slash command",
+    "skill_mcp": "Invoke MCP server operations from skill-embedded MCPs.",
+    "look_at": "Extract basic information from media files",
+    "task_create": "Create a new task with auto-generated ID",
+    "task_update": "Update an existing task with new values.",
+    "interactive_bash": "WARNING: This is TMUX ONLY.",
+}
+SCHEMA_ERROR_MARKERS = ["Schema vendor", "Skipping invalid", "failed to register tool"]
+REGISTERED_MARKER = "[omo-v2] tool registered "
+DELTA_MARKER = "[omo-v2] tool list delta "
+TMUX_MARKER = "[omo-v2] tool requires tmux interactive_bash"
+
+
+def load_json(path, fallback):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return fallback
+
+
+def read_lines(path):
+    try:
+        return open(path, encoding="utf-8", errors="replace").read().splitlines()
+    except Exception:
+        return []
+
+
+lines = read_lines(plugin_log_path)
+
+
+def last_prefixed_json(prefix):
+    for line in reversed(lines):
+        if prefix in line:
+            try:
+                return json.loads(line.split(prefix, 1)[1].strip())
+            except Exception:
+                return None
+    return None
+
+
+tools_payload = last_prefixed_json("[omo-v2] tools ") or {}
+bridge_payload = last_prefixed_json("[omo-v2] tool bridge ") or {}
+descriptions_payload = last_prefixed_json("[omo-v2] tool descriptions ") or {}
+deps_payload = last_prefixed_json("[omo-v2] tool group b ") or {}
+delta_payload = last_prefixed_json(DELTA_MARKER) or {}
+
+listed = list(tools_payload.get("tools") or [])
+missing_b = [name for name in EXPECTED_B if name not in listed]
+missing_a = [name for name in REQUIRED_A if name not in listed]
+
+registered_lines = {
+    name: any(f"{REGISTERED_MARKER}{name}" in line for line in lines)
+    for name in EXPECTED_B
+}
+missing_log_lines = [name for name, found in registered_lines.items() if not found]
+
+delta_added = list(delta_payload.get("added") or [])
+delta_before = list(delta_payload.get("beforeNames") or [])
+delta_after = list(delta_payload.get("afterNames") or [])
+# A tool the host already owned (`grep`, `glob`, `skill`) is replaced, not added, so "covered by the
+# delta" means: added by us, or already present before us; and in any case present afterwards.
+not_in_delta = [
+    name for name in EXPECTED_B
+    if name not in delta_added and name not in delta_before
+]
+not_listed_after = [name for name in EXPECTED_B if name not in delta_after]
+
+registered = bridge_payload.get("registered") or []
+modes = {entry.get("name"): entry.get("mode") for entry in registered if isinstance(entry, dict)}
+bridge_failures = bridge_payload.get("failures") or []
+bridge_missing = bridge_payload.get("missing") or []
+bridge_skipped = bridge_payload.get("skipped") or []
+
+not_zod = [name for name in EXPECTED_B if modes.get(name) != "zod"]
+
+description_ok = {
+    name: str(descriptions_payload.get(name) or "").startswith(prefix)
+    for name, prefix in DESCRIPTION_PREFIXES.items()
+}
+
+schema_errors = [line for line in lines if any(marker in line for marker in SCHEMA_ERROR_MARKERS)]
+tmux_logged = any(TMUX_MARKER in line for line in lines)
+
+selftest_text = "\n".join(read_lines(selftest_log_path))
+selftest_tail = read_lines(selftest_log_path)[-3:]
+
+plugins_body = load_json(plugins_path, {"data": []})
+plugin_entry = next((entry for entry in (plugins_body.get("data") or [])
+                     if entry.get("id") == plugin_id), None)
+
+assertions = {
+    "pluginActive": plugin_entry is not None and (plugin_entry.get("state") or {}).get("status") == "active",
+    "pluginLogFound": len(lines) > 0,
+    "bGroupListed": len(missing_b) == 0,
+    "aGroupStillListed": len(missing_a) == 0,
+    "perToolRegisteredLog": len(missing_log_lines) == 0,
+    "zodDirectAccepted": len(not_zod) == 0,
+    "noBridgeFailures": len(bridge_failures) == 0 and len(bridge_missing) == 0,
+    "noSkippedBTools": len(bridge_skipped) == 0,
+    "descriptionsFromV1": all(description_ok.values()),
+    "toolListDelta": (
+        int(delta_payload.get("after") or 0) > int(delta_payload.get("before") or 0)
+        and len(not_in_delta) == 0
+        and len(not_listed_after) == 0
+    ),
+    "requiresTmuxLogged": tmux_logged,
+    "depsLoaded": int(deps_payload.get("skills") or 0) > 0,
+    "noSchemaErrors": len(schema_errors) == 0,
+    "selftestPassed": selftest_status == "0" and "PASS" in selftest_text,
+}
+
+evidence = {
+    "stage": "s1b",
+    "capturedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "serveUrl": serve_url,
+    "plugin": {"expectedId": plugin_id, "entry": plugin_entry, "active": assertions["pluginActive"]},
+    "toolList": {
+        "expectedB": EXPECTED_B,
+        "expectedA": REQUIRED_A,
+        "listed": listed,
+        "missingB": missing_b,
+        "missingA": missing_a,
+        "count": tools_payload.get("count"),
+    },
+    "bridge": {
+        "modes": modes,
+        "failures": bridge_failures,
+        "missing": bridge_missing,
+        "skipped": bridge_skipped,
+        "deps": deps_payload,
+        "delta": delta_payload,
+    },
+    "registeredLogLines": registered_lines,
+    "descriptions": {
+        "prefixes": DESCRIPTION_PREFIXES,
+        "observed": descriptions_payload,
+        "matched": description_ok,
+    },
+    "schemaErrors": schema_errors,
+    "selftest": {
+        "exit": int(selftest_status),
+        "artifacts": selftest_log_path,
+        "tail": selftest_tail,
+        "checks": [line for line in selftest_text.splitlines() if line.startswith("[s1b-selftest]")],
+    },
+    "artifacts": {"pluginLog": plugin_log_path, "plugins": plugins_path},
+    "assertions": assertions,
+    "passed": all(assertions.values()),
+}
+
+json.dump(evidence, open(out_path, "w"), indent=2, ensure_ascii=False)
+print(json.dumps({"assertions": assertions, "modes": modes,
+                  "missingB": missing_b, "missingA": missing_a,
+                  "schemaErrors": len(schema_errors),
+                  "deltaAdded": delta_added, "deltaNotCovered": not_in_delta}, indent=2, ensure_ascii=False))
+sys.exit(0 if evidence["passed"] else 1)
+PY
+
+  echo "==> 证据: $result_file"
+  echo "==> 插件日志: $plugin_log"
+  echo "==> 自测日志: $selftest_log"
+
+  compose rm -sf serve >/dev/null 2>&1 || true
+
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: /api/plugin 未列出 ${PLUGIN_ID_EXPECTED}" >&2
+    return 1
+  fi
+  if [ "$verdict" -ne 0 ]; then
+    echo "FAIL: S1b 断言未通过（详见 $result_file）" >&2
+    return 1
+  fi
+  echo "OK: S1b 通过（10 个 B 组工具注册并真实调用：session_* 读回两会话、skill 列技能、task_create→task_update 读写一致、interactive_bash 无 tmux 错误路径）"
 }
 
 
@@ -2374,11 +2941,13 @@ main() {
     e2e-load) cmd_e2e_load "$@" ;;
     e2e-s0) cmd_e2e_s0 "$@" ;;
     e2e-s1a) cmd_e2e_s1a "$@" ;;
+    e2e-s1b) cmd_e2e_s1b "$@" ;;
     e2e-s3a) cmd_e2e_s3a "$@" ;;
     e2e-s3b) cmd_e2e_s3b "$@" ;;
     e2e-s2a) cmd_e2e_s2a "$@" ;;
     e2e-s2b1) cmd_e2e_s2b1 "$@" ;;
     e2e-s4) cmd_e2e_s4 "$@" ;;
+    e2e-tui) cmd_e2e_tui "$@" ;;
     e2e-v1) cmd_e2e_v1 "$@" ;;
     -h|--help|help|"") usage ;;
     *)

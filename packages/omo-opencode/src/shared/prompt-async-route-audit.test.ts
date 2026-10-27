@@ -49,7 +49,9 @@ const RAW_PROMPT_ALLOWLIST = new Map<string, string>([
     "binds SDK Session.promptAsync into a narrow facade consumed only by gate-routed unstable-agent-babysitter dispatch; performs no direct dispatch itself",
   ],
   [
-    ],
+    path.join(SOURCE_ROOT, "opencode-v2", "tui-btw.ts"),
+    "V2 TUI side-session dispatch uses the OpenCode 2 client domain (ctx.client.session.prompt); the V1 promptAsync gate targets @opencode-ai/sdk and has no OpenCode 2 equivalent, so this call is the only dispatch path for the BTW side session",
+  ],
 ])
 
 async function listSourceFiles(directory: string): Promise<string[]> {
