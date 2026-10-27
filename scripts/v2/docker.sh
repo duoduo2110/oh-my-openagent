@@ -10,6 +10,7 @@
 #   scripts/v2/docker.sh test packages/model-core
 #   scripts/v2/docker.sh build-index
 #   scripts/v2/docker.sh e2e-load
+#   scripts/v2/docker.sh e2e-s0
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -26,6 +27,8 @@ PLUGIN_DIR="${OMO_V2_PLUGIN_DIR:-/root/.config/opencode/omo-v2-plugin}"
 REPO_DIST_ENTRY="/repo/dist/index.js"
 REPO_SKILLS_DIR="/repo/packages/shared-skills/skills"
 PLUGIN_LOG_FILE="/tmp/oh-my-opencode.log"
+PROBE_AGENT_ID="omo-v2-probe"
+PLUGIN_AGENT_FILE="/root/.config/opencode/agent/omo-v2-probe.md"
 
 HOST_PORT="${OMO_V2_PORT:-14096}"
 SERVE_URL="http://127.0.0.1:${HOST_PORT}"
@@ -51,6 +54,8 @@ usage() {
   build-index   只构建 V2 插件产物 dist/index.js（自包含，e2e 用）
   build-plugin  容器内 bun run build（根脚本，含全部子构建）
   e2e-load      起 serve 容器并断言 /api/plugin 已加载本地插件
+  e2e-s0        OpenCode V2 宿主探针（S0）：setup 次数 / 工具 schema / agent markdown / Bun 运行时，
+                证据落 .slim/v2-evidence/s0-<ts>.json
 
 环境变量:
   OMO_V2_PLUGIN_DIR       容器内插件目录（默认 /root/.config/opencode/omo-v2-plugin）
@@ -102,6 +107,37 @@ except Exception:
 data = payload.get("data") or []
 sys.exit(0 if sys.argv[2] in json.dumps(data) else 1)
 ' "$1" "$PLUGIN_ID_EXPECTED"
+}
+
+# 1 when the probe agent id shows up in /api/agent's data[].
+api_has_probe_agent() {
+  python3 -c '
+import json, sys
+try:
+    payload = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+data = payload.get("data") or []
+sys.exit(0 if any(entry.get("id") == sys.argv[2] for entry in data) else 1)
+' "$1" "$PROBE_AGENT_ID"
+}
+
+fetch_agents() { # $1 = output file
+  curl -fsS --max-time 3 -u "${SERVE_USER}:${SERVE_PASSWORD}" "$SERVE_URL/api/agent" -o "$1" 2>/dev/null || true
+}
+
+# Poll /api/agent until the probe agent appears. $1 = output file, $2 = timeout seconds.
+wait_for_probe_agent() {
+  local out="$1" limit="$2" deadline
+  deadline=$(( $(date +%s) + limit ))
+  while :; do
+    fetch_agents "$out"
+    if [ -s "$out" ] && api_has_probe_agent "$out"; then
+      return 0
+    fi
+    [ "$(date +%s)" -ge "$deadline" ] && return 1
+    sleep 2
+  done
 }
 
 cmd_build() {
@@ -235,6 +271,225 @@ json.dump(
   echo "OK: 插件 ${PLUGIN_ID_EXPECTED} 已在 OpenCode V2 中加载，startup-notice 已出现"
 }
 
+# S0 host probe: proves setup cardinality, plain-JSON-Schema tool acceptance, agent markdown
+# discovery and the Bun runtime, all inside the serve container. Recreates the serve container
+# first so /tmp/oh-my-opencode.log only contains this run's setup calls.
+cmd_e2e_s0() {
+  mkdir -p "$EVIDENCE_DIR"
+  local ts api_json log_file plugin_log agents_json tool_status=0 verdict=0
+  ts="$(date +%Y%m%d-%H%M%S)"
+  api_json="$EVIDENCE_DIR/s0-${ts}.plugin.json"
+  log_file="$EVIDENCE_DIR/s0-${ts}.serve.log"
+  plugin_log="$EVIDENCE_DIR/s0-${ts}.plugin.log"
+  agents_json="$EVIDENCE_DIR/s0-${ts}.agents.json"
+  local result_file="$EVIDENCE_DIR/s0-${ts}.json"
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "==> 镜像缺失，先构建 $IMAGE"
+    compose build
+  fi
+
+  echo "==> 构建 V2 插件产物 (dist/index.js)"
+  cmd_build_index
+
+  echo "==> 写入插件目录与 V2 配置: $PLUGIN_DIR"
+  stage_plugin | sed 's/^/    /'
+
+  # Exercise the plugin's own (idempotent) agent-file write instead of pre-staging it.
+  run_v2 bash -lc "rm -f '${PLUGIN_AGENT_FILE}'"
+
+  echo "==> 启动 serve 容器 (宿主 127.0.0.1:${HOST_PORT} -> 4096)"
+  compose rm -sf serve >/dev/null 2>&1 || true
+  compose up -d --no-build serve
+
+  # /api/plugin is 200 before plugins finish loading, so poll for the expected id.
+  local tmp deadline status=1
+  tmp="$(mktemp)"
+  deadline=$(( $(date +%s) + 90 ))
+  while :; do
+    curl -fsS --max-time 3 -u "${SERVE_USER}:${SERVE_PASSWORD}" \
+      "$SERVE_URL/api/plugin" -o "$tmp" 2>/dev/null || true
+    if [ -s "$tmp" ] && api_has_plugin "$tmp"; then
+      status=0
+      break
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "!!! 90s 内 /api/plugin 未出现插件 ${PLUGIN_ID_EXPECTED}" >&2
+      break
+    fi
+    sleep 3
+  done
+  cp "$tmp" "$api_json" 2>/dev/null || true
+  rm -f "$tmp"
+
+  # R7: agent markdown discovery. The probe's setup wrote the file; check whether the host
+  # picked it up on its own, and only fall back to a location reload when it did not.
+  local agent_wo_reload=1 reload_invoked=0 agent_found=1
+  if wait_for_probe_agent "$agents_json" 30; then
+    agent_found=0
+    agent_wo_reload=0
+  else
+    echo "==> /api/agent 首轮未发现 ${PROBE_AGENT_ID}，尝试 POST /api/location/reload"
+    reload_invoked=1
+    curl -sS -o /dev/null --max-time 5 -X POST -u "${SERVE_USER}:${SERVE_PASSWORD}" \
+      "$SERVE_URL/api/location/reload" 2>/dev/null || true
+    if wait_for_probe_agent "$agents_json" 20; then
+      agent_found=0
+    fi
+  fi
+  fetch_agents "$agents_json"
+
+  # No tool-list endpoint exists in 2.1.4; record that fact instead of pretending otherwise.
+  tool_status="$(curl -sS -o /dev/null --max-time 3 -w '%{http_code}' \
+    -u "${SERVE_USER}:${SERVE_PASSWORD}" "$SERVE_URL/api/tool" 2>/dev/null || echo "000")"
+
+  # Give the logger's 500ms flush timer a moment, then snapshot the plugin log.
+  sleep 2
+  docker exec omo-v2-serve bash -lc "cat '${PLUGIN_LOG_FILE}' 2>/dev/null" > "$plugin_log" 2>/dev/null || true
+  compose logs --no-color --timestamps serve > "$log_file" 2>&1 || true
+
+  python3 - "$plugin_log" "$agents_json" "$api_json" "$tool_status" "$agent_wo_reload" \
+    "$reload_invoked" "$agent_found" "$result_file" "$SERVE_URL" "$PLUGIN_ID_EXPECTED" "$PROBE_AGENT_ID" <<'PY' || verdict=$?
+import datetime
+import json
+import sys
+
+(plugin_log_path, agents_path, plugins_path, tool_status, agent_wo_reload,
+ reload_invoked, agent_found, out_path, serve_url, plugin_id, agent_id) = sys.argv[1:12]
+
+def load_json(path, fallback):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return fallback
+
+lines = []
+try:
+    lines = open(plugin_log_path, encoding="utf-8", errors="replace").read().splitlines()
+except Exception:
+    pass
+
+setup_lines = [line for line in lines if "[omo-v2-probe] setup#" in line]
+locations = []
+for line in setup_lines:
+    marker = "location="
+    locations.append(line.split(marker, 1)[1].strip() if marker in line else "")
+
+def prefixed_json(prefix):
+    for line in reversed(lines):
+        if prefix in line:
+            payload = line.split(prefix, 1)[1].strip()
+            try:
+                return json.loads(payload)
+            except Exception:
+                return None
+    return None
+
+detail = prefixed_json("[omo-v2-probe] detail ") or {}
+tools_payload = prefixed_json("[omo-v2-probe] tools ") or {}
+tools = tools_payload.get("tools") or []
+
+plugins_body = load_json(plugins_path, {"data": []})
+plugin_entry = next((entry for entry in (plugins_body.get("data") or [])
+                     if entry.get("id") == plugin_id), None)
+agents_body = load_json(agents_path, {"data": []})
+agent_entry = next((entry for entry in (agents_body.get("data") or [])
+                    if entry.get("id") == agent_id), None)
+
+bun = detail.get("bun") or {}
+assertions = {
+    "pluginActive": plugin_entry is not None and plugin_entry.get("state", {}).get("status") == "active",
+    "setupObserved": len(setup_lines) > 0,
+    "setupExactlyOnce": len(setup_lines) == 1,
+    "toolRegistered": any(name == "omo_v2_probe" for name in tools),
+    "agentDiscovered": agent_found == "0" and agent_entry is not None,
+    "bunGlobalsAvailable": bun.get("typeofBun") == "object",
+}
+
+evidence = {
+    "stage": "s0",
+    "capturedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "serveUrl": serve_url,
+    "plugin": {
+        "expectedId": plugin_id,
+        "entry": plugin_entry,
+        "active": assertions["pluginActive"],
+    },
+    "r2ToolSchema": {
+        "probeTool": "omo_v2_probe",
+        "inputSchema": {"type": "object", "properties": {"echo": {"type": "string"}},
+                        "required": ["echo"], "additionalProperties": False},
+        "executeResultShape": "{ output: string }",
+        "registeredInHost": assertions["toolRegistered"],
+        "hostToolCount": tools_payload.get("count"),
+        "hostTools": tools,
+        "toolListEndpoint": {"path": "/api/tool", "status": tool_status,
+                             "available": tool_status == "200"},
+        "note": "Host accepts the registered tool list; actual execute() output was not run in S0 "
+                "because that needs a provider-backed model turn.",
+    },
+    "r7Setup": {
+        "count": len(setup_lines),
+        "locations": locations,
+        "once": assertions["setupExactlyOnce"],
+        "note": "setup is invoked per host location; one serve location should yield one call.",
+    },
+    "r8Runtime": {
+        "typeofBun": bun.get("typeofBun"),
+        "bunVersion": bun.get("version"),
+        "processVersionsBun": bun.get("processVersionsBun"),
+    },
+    "agentMarkdown": {
+        "id": agent_id,
+        "found": assertions["agentDiscovered"],
+        "discoveredWithoutReload": agent_wo_reload == "0",
+        "reloadInvoked": reload_invoked == "1",
+        "entry": agent_entry,
+        "writtenByPluginSetup": (detail.get("agentFile") or {}).get("written"),
+    },
+    "agentFile": detail.get("agentFile"),
+    "contextKeys": detail.get("contextKeys"),
+    "artifacts": {
+        "pluginLog": plugin_log_path,
+        "agents": agents_path,
+        "plugins": plugins_path,
+    },
+    "assertions": assertions,
+    "passed": all(assertions[key] for key in
+                  ("pluginActive", "setupObserved", "toolRegistered", "agentDiscovered")),
+    "verdicts": {
+        "R2": "accepted" if assertions["toolRegistered"] else "rejected",
+        "R7": {"setupCalls": len(setup_lines), "locations": locations},
+        "R8": {"typeofBun": bun.get("typeofBun"), "bunVersion": bun.get("version")},
+    },
+}
+
+json.dump(evidence, open(out_path, "w"), indent=2, ensure_ascii=False)
+print(json.dumps({"assertions": assertions, "verdicts": evidence["verdicts"],
+                  "agentDiscoveredWithoutReload": evidence["agentMarkdown"]["discoveredWithoutReload"],
+                  "toolListEndpointStatus": tool_status}, indent=2, ensure_ascii=False))
+sys.exit(0 if evidence["passed"] else 1)
+PY
+
+  echo "==> 证据: $result_file"
+  echo "==> serve 日志: $log_file"
+  echo "==> 插件日志: $plugin_log"
+
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: /api/plugin 未列出 ${PLUGIN_ID_EXPECTED}" >&2
+    compose rm -sf serve >/dev/null 2>&1 || true
+    return 1
+  fi
+  if [ "$verdict" -ne 0 ]; then
+    echo "FAIL: S0 断言未通过（详见 $result_file）" >&2
+    compose rm -sf serve >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  compose rm -sf serve >/dev/null 2>&1 || true
+  echo "OK: S0 探针通过（setup 次数/工具注册/agent 发现/Bun 运行时，详见证据 JSON）"
+}
+
 main() {
   local sub="${1:-}"
   [ $# -gt 0 ] && shift || true
@@ -246,6 +501,7 @@ main() {
     build-plugin) cmd_build_plugin "$@" ;;
     build-index) cmd_build_index "$@" ;;
     e2e-load) cmd_e2e_load "$@" ;;
+    e2e-s0) cmd_e2e_s0 "$@" ;;
     -h|--help|help|"") usage ;;
     *)
       echo "未知命令: $sub" >&2
