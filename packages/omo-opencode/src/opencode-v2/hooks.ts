@@ -1,8 +1,8 @@
 /**
- * OpenCode V2 hook bridge (S2b-1, mechanical keys).
+ * OpenCode V2 hook bridge (S2b-1 mechanical keys, S2b-2 semantic keys).
  *
- * The V1 engine owns behaviour; this module only re-points the *mechanical* V2 hook slots at the
- * corresponding V1 handlers:
+ * The V1 engine owns behaviour; this module only re-points V2 hook slots at the corresponding V1
+ * handlers:
  *
  *   V1 key                                   V2 slot
  *   event                                    ctx.event.subscribe({ signal })  (async pump)
@@ -12,9 +12,14 @@
  *   command.execute.before                   — none in V2 2.1.4 (degraded, recorded)
  *   experimental.session.compacting          ctx.session.hook("compaction")
  *   experimental.compaction.autocontinue     ctx.session.hook("compaction")
+ *   chat.message                             ctx.session.hook("prompt")           (S2b-2)
+ *   experimental.chat.system.transform       ctx.session.hook("context")          (S2b-2)
+ *   experimental.chat.messages.transform     ctx.session.hook("context")          (S2b-2)
+ *   chat.params                              ctx.session.hook("context")          (S2b-2)
+ *   chat.headers                             ctx.session.hook("http.request")     (S2b-2)
  *
- * The semantic keys (`chat.message`, `chat.params`, `chat.headers`, `config`,
- * `experimental.chat.*.transform`) are deliberately not touched here: they belong to S2b-2 / S3b.
+ * The semantic adaptations live in `./hooks/semantic-hooks` (V1 `{info, parts}` <-> V2 provider
+ * `Message[]`, `string[]` <-> `SystemPart[]`, and the options mapping).
  *
  * Payload contracts verified against the host packages, not guessed:
  *   - `ToolDomain.hook(name, cb)` passes ONE mutable event object per call
@@ -22,8 +27,8 @@
  *     `{ ...same, status: "completed" | "error", result | error }` for `execute.after`).
  *   - `ToolEditor` exposes `list()` / `get(id)` / `update(id, fn)` where the tool's schema field is
  *     `input` (V1 calls it `parameters`).
- *   - `SessionHooks.compaction` receives a mutable `SessionContext` (`system: SystemPart[]`,
- *     `messages`, `tools`, ...) and may set `result`.
+ *   - `SessionHooks` is a keyed map (`prompt`, `context`, `compaction`, `model.request`,
+ *     `http.request`, ...) and each callback gets one mutable event object.
  *   - `EventDomain.subscribe({ signal })` returns an `AsyncIterable` of `{ id, type, data, ... }`
  *     events, i.e. a *different* envelope than the V1 SDK's `{ type, properties }`.
  *
@@ -33,8 +38,8 @@
  *
  * Two boundaries this file enforces:
  *   - the hook disable list (`./hooks/disabled-hooks`) is applied at *assembly*, so a hook that
- *     would read the shim's fabricated `session.messages`/`todo`/`status` never exists to fire;
- *     the bridge logs `[omo-v2] hooks disabled: ...` and keeps the list in its snapshot;
+ *     would read a shim value with no V2 source never exists to fire; the bridge logs
+ *     `[omo-v2] hooks disabled: ...` and keeps the list in its snapshot;
  *   - `hooks.tool` (the whole V1 tool registry) is **not** registered here. Tools come from
  *     `./tools` (S1a); registering the registry would silently replace the bridged tools. The
  *     bridge reads `ctx.tool.list()` once and logs the boundary instead.
@@ -42,7 +47,9 @@
 import type { Hooks } from "@opencode-ai/plugin"
 
 import { log } from "../shared/logger"
-import type { OpenCodeV2Runtime } from "./adapter"
+import { locationKeyOf, type OpenCodeV2Runtime } from "./adapter"
+import { captureSessionTodos } from "./adapter/client-shim"
+import { noteSessionEvent } from "./adapter/status-registry"
 import { asRecord, readString } from "./adapter/types"
 import {
   DISABLED_HOOKS_LOG_PREFIX,
@@ -54,6 +61,12 @@ import {
   type EventPumpHandle,
   type EventPumpStats,
 } from "./hooks/event-pump"
+import {
+  planSemanticBridge,
+  logSemanticPlan,
+  SEMANTIC_SLOT_OF,
+  type SemanticHookKey,
+} from "./hooks/semantic-hooks"
 
 export const HOOK_LOG_PREFIX = "[omo-v2] hook"
 
@@ -69,7 +82,16 @@ export const HOOK_KEY = {
   commandBefore: "command.execute.before",
   compacting: "experimental.session.compacting",
   autocontinue: "experimental.compaction.autocontinue",
+  // S2b-2 semantic keys (see ./hooks/semantic-hooks for the payload adaptations).
+  chatMessage: "chat.message",
+  chatParams: "chat.params",
+  chatHeaders: "chat.headers",
+  systemTransform: "experimental.chat.system.transform",
+  messagesTransform: "experimental.chat.messages.transform",
 } as const
+
+/** V1 key -> V2 session.hook slot, re-exported so the bridge snapshot can state the mapping. */
+export { SEMANTIC_SLOT_OF }
 
 // ---------------------------------------------------------------------------------------------
 // V2 structural views (the host package's private type graph is not importable from here)
@@ -83,6 +105,7 @@ type ToolListFn = () => Promise<unknown>
 type SubscribeFn = (options: { readonly signal: AbortSignal }) => AsyncIterable<unknown>
 
 export type V2HookContextLike = {
+  readonly location?: { readonly directory?: string }
   readonly event?: { readonly subscribe?: SubscribeFn }
   readonly tool?: {
     readonly hook?: HookRegisterFn
@@ -92,6 +115,8 @@ export type V2HookContextLike = {
   }
   readonly session?: { readonly hook?: HookRegisterFn }
   readonly command?: unknown
+  /** Plugin-side per-session todo store backend (`StorageDomain` in V2 2.1.4). */
+  readonly storage?: unknown
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -646,18 +671,36 @@ type HookBridge = {
 }
 
 type InstalledBridge = {
+  /** `ctx.location.directory` of the location this bridge belongs to (`""` when it has none). */
+  readonly key: string
   readonly hooks: Hooks
   readonly bridge: HookBridge
   references: number
 }
 
-let installed: InstalledBridge | undefined
+/**
+ * One bridge per host *location*, keyed exactly like the adapter (`locationKeyOf`: the
+ * `ctx.location.directory` string, `""` for a context that carries none).
+ *
+ * A single global install was wrong on two counts: two locations alive at once let the second
+ * `setup` take over the first location's bridge (the first location's event stream then had no
+ * pump, and the second had the first's handlers), and re-running `setup` for a location it had
+ * already installed added a *second* event pump plus duplicate `execute.before`/`execute.after`/
+ * `compaction` registrations. Keyed, A and B coexist and a repeat install of one key is only a
+ * reference bump.
+ */
+const installed = new Map<string, InstalledBridge>()
 /** Snapshot taken at dispose time: the hook counters an e2e needs after `setup` has been torn down. */
 let lastSnapshot: HookBridgeSnapshot | undefined
+/** Key of the most recently installed live bridge and of the last disposed one (see the reader). */
+let lastInstalledKey: string | undefined
+let lastSnapshotKey: string | undefined
 
 function degradedEntry(key: string, reason: string): HookBridgeDegradation {
   return { key, reason }
 }
+
+type TodoCapture = (tool: string, sessionID: string, input: unknown) => Promise<void>
 
 async function registerToolHooks(
   context: V2HookContextLike,
@@ -666,6 +709,7 @@ async function registerToolHooks(
   degraded: HookBridgeDegradation[],
   registrations: HookRegistration[],
   bridged: string[],
+  captureTodos: TodoCapture,
 ): Promise<void> {
   const toolDomain = context.tool
   const register = toolDomain?.hook
@@ -686,7 +730,22 @@ async function registerToolHooks(
       key: HOOK_KEY.toolBefore,
       v1: "tool.execute.before",
       v2: "execute.before",
-      handle: (event) => handleToolBefore(event, hooks, meter),
+      handle: async (event) => {
+        // The only point where a tool's *input* is visible before it runs: a todo-carrying call
+        // (todowrite/task_*) is folded into the plugin-side store so `session.todo()` and the tool
+        // that produced the todos cannot disagree. Failure here never blocks the tool call.
+        const record = asRecord(event)
+        const tool = readString(record, "tool") ?? ""
+        const sessionID = readString(record, "sessionID") ?? ""
+        if (tool.length > 0 && sessionID.length > 0) {
+          try {
+            await captureTodos(tool, sessionID, record?.["input"])
+          } catch (error) {
+            log(`${HOOK_LOG_PREFIX} session todo capture failed`, { tool, error: errorMessage(error) })
+          }
+        }
+        await handleToolBefore(event, hooks, meter)
+      },
     },
     {
       key: HOOK_KEY.toolAfter,
@@ -782,6 +841,47 @@ async function registerCompactionHooks(
   }
 }
 
+async function registerSemanticHooks(
+  context: V2HookContextLike,
+  hooks: Hooks,
+  meter: Meter,
+  degraded: HookBridgeDegradation[],
+  registrations: HookRegistration[],
+  bridged: string[],
+  directory: string,
+): Promise<void> {
+  const register = context.session?.hook
+  const plan = planSemanticBridge({ hooks, meter, directory })
+  degraded.push(...plan.degraded)
+  logSemanticPlan(plan)
+
+  if (typeof register !== "function") {
+    for (const registration of plan.registrations) {
+      degraded.push(
+        degradedEntry(registration.name, "V2 ctx.session.hook is not available on this host"),
+      )
+    }
+    return
+  }
+  if (plan.registrations.length === 0) return
+
+  for (const registration of plan.registrations) {
+    try {
+      registrations.push(await register.call(context.session, registration.name, registration.callback))
+      log(`${HOOK_LOG_PREFIX} ${registration.name} slot bridged`, {
+        v1Keys: plan.bridged.filter((key: SemanticHookKey) => SEMANTIC_SLOT_OF[key] === registration.name),
+      })
+    } catch (error) {
+      degraded.push(
+        degradedEntry(registration.name, `ctx.session.hook("${registration.name}") threw: ${errorMessage(error)}`),
+      )
+    }
+  }
+  for (const key of plan.bridged) {
+    if (!bridged.includes(key)) bridged.push(key)
+  }
+}
+
 function registerCommandHook(
   context: V2HookContextLike,
   degraded: HookBridgeDegradation[],
@@ -830,6 +930,9 @@ function installEventPump(
   const pump = startEventPump({
     subscribe: (options) => Reflect.apply(subscribe, eventDomain, [options]) as AsyncIterable<unknown>,
     onEvent: async (event) => {
+      // The shim's `session.status()` has no live source on a real 2.1.4 host (no `active` on the
+      // plugin SessionDomain), so the stream is the source: record it before V1 sees the event.
+      noteSessionEvent(event)
       meter.fire(HOOK_KEY.event, { type: typeOfEvent(event) })
       await handler({ event: toV1Event(event) as unknown as Parameters<typeof handler>[0]["event"] })
     },
@@ -892,6 +995,7 @@ async function install(
   context: V2HookContextLike,
   hooks: Hooks,
   disabled: readonly string[],
+  location: string,
 ): Promise<HookBridge> {
   const meter = createMeter()
   const degraded: HookBridgeDegradation[] = []
@@ -906,9 +1010,24 @@ async function install(
   })
 
   const tools = await probeToolBoundary(context, hooks)
+  // Same string as the adapter keys runtimes on; passed in so a log line and a map entry can never
+  // disagree about which location they describe.
+  const directory = location
+  const storage = context.storage
 
-  await registerToolHooks(context, hooks, meter, degraded, registrations, bridged)
+  await registerToolHooks(
+    context,
+    hooks,
+    meter,
+    degraded,
+    registrations,
+    bridged,
+    async (tool, sessionID, input) => {
+      await captureSessionTodos({ storage, sessionID, tool, input })
+    },
+  )
   await registerCompactionHooks(context, hooks, meter, degraded, registrations, bridged)
+  await registerSemanticHooks(context, hooks, meter, degraded, registrations, bridged, directory)
   registerCommandHook(context, degraded)
   let pump = installEventPump(context, hooks, meter, degraded, bridged)
 
@@ -936,6 +1055,7 @@ async function install(
     }
     const finalSnapshot = snapshotCache(pumpStats)
     log(`${HOOK_LOG_PREFIX} bridge disposed`, {
+      location,
       bridged: finalSnapshot.bridged,
       degraded: finalSnapshot.degraded,
       counters: finalSnapshot.counters,
@@ -944,10 +1064,12 @@ async function install(
       pump: pumpStats,
     })
     lastSnapshot = finalSnapshot
+    lastSnapshotKey = location
     pump = undefined
   }
 
   log(`${HOOK_LOG_PREFIX} bridge installed`, {
+    location,
     bridged,
     degraded,
     counters: meter.snapshot(),
@@ -961,7 +1083,7 @@ async function install(
   }
 }
 
-/** Creates a release for the current install; releasing twice never eats a second reference. */
+/** Creates a release for one install of one location; releasing twice never eats a second reference. */
 function createRelease(target: InstalledBridge): () => Promise<void> {
   let released = false
   return async (): Promise<void> => {
@@ -969,55 +1091,126 @@ function createRelease(target: InstalledBridge): () => Promise<void> {
     released = true
     target.references -= 1
     if (target.references > 0) {
-      log(`${HOOK_LOG_PREFIX} bridge reference released`, { references: target.references })
+      log(`${HOOK_LOG_PREFIX} bridge reference released`, {
+        location: target.key,
+        references: target.references,
+      })
       return
     }
-    if (installed === target) installed = undefined
+    // Drop the entry *before* awaiting dispose: a setup for the same location that lands during
+    // teardown then installs its own bridge instead of reusing one that is already closing. Only
+    // this object's own entry is removed, so a bridge a later install put under the same key (a
+    // fresh runtime for the same location) is left alone.
+    if (installed.get(target.key) === target) installed.delete(target.key)
+    log(`${HOOK_LOG_PREFIX} bridge release`, { location: target.key, references: target.references })
     await target.bridge.dispose()
   }
 }
 
 /**
- * Bridges the mechanical V1 hooks onto the V2 host. Resolves the release function for `setup`'s
- * cleanup; calling it twice is safe. A second call for the same V1 runtime reuses the first
- * install (the adapter hands out one runtime per location, so the hooks object is the right
- * identity key).
+ * Bridges the mechanical V1 hooks onto the V2 host, one bridge per location
+ * (`locationKeyOf(context)`: `ctx.location.directory`, `""` when the context has none — the same
+ * key the adapter counts runtimes on).
+ *
+ * Resolves the `release` function for `setup`'s cleanup:
+ *   - the first install for a location builds the bridge with one reference;
+ *   - a second `setup` for a location that already has a live bridge for the *same* V1 runtime is
+ *     a reference bump and registers nothing (no second event pump, no duplicate `execute.*`);
+ *   - a second `setup` for a location whose runtime was replaced tears the stale bridge down
+ *     first, because its handlers belong to a runtime the adapter has already released;
+ *   - releasing is per location and idempotent: the last release disposes the bridge, and
+ *     releasing twice never eats another location's reference.
  */
 export async function registerOpenCodeV2Hooks(
   context: unknown,
   runtime: OpenCodeV2Runtime | undefined,
 ): Promise<() => Promise<void>> {
   if (runtime === undefined) {
-    log(`${HOOK_LOG_PREFIX} bridge skipped`, { reason: "V1 runtime was not assembled" })
+    log(`${HOOK_LOG_PREFIX} bridge skipped`, {
+      location: locationKeyOf(context),
+      reason: "V1 runtime was not assembled",
+    })
     return async (): Promise<void> => {}
   }
 
-  if (installed !== undefined && installed.hooks === runtime.hooks) {
-    installed.references += 1
-    log(`${HOOK_LOG_PREFIX} bridge reused`, { references: installed.references })
-    return createRelease(installed)
+  const key = locationKeyOf(context)
+  const existing = installed.get(key)
+
+  if (existing !== undefined && existing.hooks === runtime.hooks) {
+    existing.references += 1
+    lastInstalledKey = key
+    log(`${HOOK_LOG_PREFIX} bridge reused`, { location: key, references: existing.references })
+    return createRelease(existing)
   }
 
-  const bridge = await install(context as V2HookContextLike, runtime.hooks, runtime.report.disabledHooks)
-  const target: InstalledBridge = { hooks: runtime.hooks, bridge, references: 1 }
-  installed = target
+  if (existing !== undefined) {
+    // Same location, different V1 runtime: the old bridge points at handlers the adapter has
+    // already released, so it is torn down before the new one installs a second set of slots.
+    installed.delete(key)
+    log(`${HOOK_LOG_PREFIX} bridge replaced`, {
+      location: key,
+      reason: "a different V1 runtime now owns this location",
+    })
+    await existing.bridge.dispose()
+  }
+
+  const bridge = await install(
+    context as V2HookContextLike,
+    runtime.hooks,
+    runtime.report.disabledHooks,
+    key,
+  )
+  const target: InstalledBridge = { key, hooks: runtime.hooks, bridge, references: 1 }
+  installed.set(key, target)
+  lastInstalledKey = key
 
   // The adapter's `runtime.dispose()` calls `hooks.dispose`; wrapping it here makes the real-serve
   // shutdown stop the pump even though `setup`'s returned cleanup is ignored by the current entry.
+  // The map entry goes too: the bridge this location publishes must never be one that is closing.
   const originalDispose = runtime.hooks.dispose
   runtime.hooks.dispose = async (): Promise<void> => {
+    if (installed.get(key) === target) installed.delete(key)
     await bridge.dispose()
     await originalDispose?.()
   }
 
+  log(`${HOOK_LOG_PREFIX} bridge reference acquired`, { location: key, references: target.references })
   return createRelease(target)
 }
 
-export function readOpenCodeV2HookBridge(): HookBridgeSnapshot | undefined {
-  return installed?.bridge.snapshot() ?? lastSnapshot
+/**
+ * Bridge snapshot for the selftest / e2e layer.
+ *
+ * With `locationKey` (the `ctx.location.directory` the adapter keys on, `""` for a context with
+ * none): that location's live bridge, or its last snapshot once that location was fully released.
+ *
+ * Without an argument it answers "the bridge that was installed most recently": the most recently
+ * installed *live* bridge, falling back to the last disposed snapshot. With two locations alive at
+ * once that is only one of them — pass the key, or use `_hookBridgeLocationKeysForTesting()`.
+ */
+export function readOpenCodeV2HookBridge(locationKey?: string): HookBridgeSnapshot | undefined {
+  if (locationKey !== undefined) {
+    const live = installed.get(locationKey)
+    if (live !== undefined) return live.bridge.snapshot()
+    return lastSnapshotKey === locationKey ? lastSnapshot : undefined
+  }
+  const recent = lastInstalledKey === undefined ? undefined : installed.get(lastInstalledKey)
+  return recent?.bridge.snapshot() ?? lastSnapshot
+}
+
+/** Location keys with a live bridge, sorted; the count is the "one bridge per location" evidence. */
+export function _hookBridgeLocationKeysForTesting(): string[] {
+  return [...installed.keys()].sort()
+}
+
+/** Reference count of a location's bridge, or `undefined` when that location has no live bridge. */
+export function _hookBridgeReferencesForTesting(locationKey: string): number | undefined {
+  return installed.get(locationKey)?.references
 }
 
 export function _resetOpenCodeV2HooksForTesting(): void {
-  installed = undefined
+  installed.clear()
   lastSnapshot = undefined
+  lastSnapshotKey = undefined
+  lastInstalledKey = undefined
 }

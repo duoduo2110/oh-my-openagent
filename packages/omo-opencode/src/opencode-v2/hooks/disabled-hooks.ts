@@ -1,24 +1,27 @@
 /**
- * V2 hook disable list (Gate 2 followup 3).
+ * V2 hook disable list (Gate 2 followup 3, re-evaluated in S4).
  *
- * The V2 client shim answers `session.messages` with empty `parts`, `session.todo` with `[]` and
- * `session.status` with a bare "running" (`./adapter/client-shim`). A V1 hook that reads those
- * values does not notice the gap: it keeps running on fabricated state and acts on it (rewrites a
- * transcript, injects a compaction prompt, re-prompts a session because "no todo is done"). That is
- * worse than not running the hook at all, so those hooks are switched off at *assembly* through the
- * V1 `disabled_hooks` config gate (`create-plugin-module` -> `isHookEnabled`): the factory is never
- * called, so there is no handler to fire and no fabricated state to read.
+ * A V1 hook that reads state the V2 host cannot supply does not notice the gap: it keeps running on
+ * missing state and acts on it (rewrites a transcript, injects a compaction prompt, re-prompts a
+ * session because "no todo is done"). That is worse than not running the hook at all, so such hooks
+ * are switched off at *assembly* through the V1 `disabled_hooks` config gate
+ * (`create-plugin-module` -> `isHookEnabled`): the factory is never called, so there is no handler to
+ * fire and no missing state to read.
  *
- * Names are the real ones from `src/config/schema/hooks.ts` (`HookNameSchema`); the file:line next
- * to each default is the place that reads the shimmed client:
+ * S4 rebuilt `session.messages` (real parts from `session.context()`), `session.status`
+ * (`active()`+`list()`), `config.get` (live domains + the opcode config files) and `session.todo`
+ * (plugin-side store). Four hooks therefore left the default list (`S4_RELEASED_HOOKS`). The two
+ * that remain are the ones whose *writer* has no V2 counterpart, not merely their reader:
  *
- *   claude-code-hooks            hooks/claude-code-hooks/transcript.ts (session.messages)
- *                                hooks/claude-code-hooks/handlers/tool-execute-after-handler.ts
- *   compaction-context-injector  hooks/compaction-context-injector/session-prompt-config-resolver.ts
- *   preemptive-compaction        hooks/preemptive-compaction-no-text-tail.ts (session.messages)
- *   compaction-todo-preserver    hooks/compaction-todo-preserver/hook.ts (session.todo)
- *   todo-continuation-enforcer   hooks/todo-continuation-enforcer/idle-event.ts (session.todo)
- *   session-notification         hooks/session-todo-status.ts (session.todo)
+ *   compaction-todo-preserver  hooks/compaction-todo-preserver/hook.ts:85 `resolveTodoWriter()`
+ *                              imports "opencode/session/todo" and returns null in V2 (the package
+ *                              does not exist there), so a capture would restore nothing and the
+ *                              compaction would silently lose the todos it claimed to protect.
+ *   todo-continuation-enforcer hooks/todo-continuation-enforcer/idle-event.ts:119 reads todos, and
+ *                              the V2 2.1.4 host exposes **no todo producer** (26 host tools, none
+ *                              named todowrite/todo). The hook could only ever see "No todos" and
+ *                              never do its job; keeping it off makes that explicit instead of
+ *                              paying a message-history read per idle event for nothing.
  *
  * Overriding:
  *   - `OMO_V2_DISABLED_HOOKS` (comma separated) and/or the user's own `disabled_hooks` in
@@ -40,12 +43,43 @@ export type DefaultDisabledHook = {
 }
 
 export const DEFAULT_DISABLED_HOOKS: readonly DefaultDisabledHook[] = [
-  { hook: "claude-code-hooks", evidence: "claude-code-hooks/transcript.ts: session.messages" },
-  { hook: "compaction-context-injector", evidence: "compaction-context-injector/session-prompt-config-resolver.ts: session.messages" },
-  { hook: "preemptive-compaction", evidence: "preemptive-compaction-no-text-tail.ts: session.messages" },
-  { hook: "compaction-todo-preserver", evidence: "compaction-todo-preserver/hook.ts: session.todo" },
-  { hook: "todo-continuation-enforcer", evidence: "todo-continuation-enforcer/idle-event.ts: session.todo" },
-  { hook: "session-notification", evidence: "session-todo-status.ts: session.todo" },
+  {
+    hook: "compaction-todo-preserver",
+    evidence:
+      "compaction-todo-preserver/hook.ts:85 resolveTodoWriter(): imports opencode/session/todo, absent in V2 -> restore() is a no-op",
+  },
+  {
+    hook: "todo-continuation-enforcer",
+    evidence:
+      "todo-continuation-enforcer/idle-event.ts:119 reads todos; OpenCode 2.1.4 exposes no todo producer (host tool list has no todowrite)",
+  },
+]
+
+/**
+ * Hooks the S4 semantic shim released from the default list, with the evidence that made it safe.
+ * Kept in the code (not only in a report) so a reviewer can re-check the reason a hook is *on*.
+ */
+export const S4_RELEASED_HOOKS: readonly DefaultDisabledHook[] = [
+  {
+    hook: "claude-code-hooks",
+    evidence:
+      "transcript.ts reads session.messages: S4 rebuilds {info, parts} from session.context() (text/reasoning/tool parts, ids preserved)",
+  },
+  {
+    hook: "compaction-context-injector",
+    evidence:
+      "session-prompt-config-resolver.ts reads session.messages text: same real history, parts included",
+  },
+  {
+    hook: "preemptive-compaction",
+    evidence:
+      "preemptive-compaction-no-text-tail.ts reads message parts + tokens: S4 maps content parts and assistant tokens/cost",
+  },
+  {
+    hook: "session-notification",
+    evidence:
+      "session-todo-status.ts reads session.todo: S4 serves the plugin-side store instead of a fabricated [], and status is active()+list()",
+  },
 ]
 
 export type DisabledHookState = {

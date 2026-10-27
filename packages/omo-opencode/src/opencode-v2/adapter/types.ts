@@ -29,6 +29,8 @@ export type V2ContextLike = {
   readonly skill?: object
   readonly worktree?: object
   readonly app?: object
+  /** `StorageDomain` (`get`/`set`/`remove`/`scan`); backs the plugin-side session todo store. */
+  readonly storage?: object
 }
 
 export function asRecord(value: unknown): UnknownRecord | undefined {

@@ -118,9 +118,24 @@ const inFlight = new Map<string, Promise<OpenCodeV2Runtime | undefined>>()
 /** Hook keys the port counts as hooks; `tool` and `dispose` are lifecycle, not hook entries. */
 const NON_HOOK_KEYS = new Set(["tool", "dispose"])
 
+/** Assembly stages in the order they run; a failure is tagged with the stage it happened at. */
+export type AssemblyStage =
+  | "runtime-skills"
+  | "managers"
+  | "tools"
+  | "hooks"
+  | "plugin-interface"
+
 export type AssembleV1RuntimeOptions = {
   /** Extra names on top of the V2 defaults; the selftest uses this to prove the list is the gate. */
   readonly additionalDisabledHooks?: readonly string[]
+  /**
+   * Test-only fault injection: after the named stage has built its part, the assembly throws where a
+   * real failure would surface. The selftest uses it to prove the stage tag, the release order of
+   * whatever was already built, and that a failed assembly publishes no runtime — without having to
+   * break a real dependency. Production callers never set it.
+   */
+  readonly failAtStage?: AssemblyStage
 }
 
 function hookKeysOf(hooks: Hooks): string[] {
@@ -217,6 +232,13 @@ export async function assembleV1RuntimeOnV2(
   const startedAt = Date.now()
   const { input, report } = createV1PluginInput(context)
   const capture: AssemblyCapture = { stage: "config" }
+  // Injected only by the selftest: the throw is raised from inside the same override the real code
+  // runs in, so the catch block below sees a genuine stage-tagged failure.
+  const failIfInjected = (stage: AssemblyStage): void => {
+    if (options.failAtStage === stage) {
+      throw new Error(`[omo-v2] injected assembly failure at ${stage} (failAtStage, test-only)`)
+    }
+  }
 
   const pluginModule = createPluginModule({
     loadConfigChain: (directory: string): PluginConfigValidation => {
@@ -235,12 +257,14 @@ export async function assembleV1RuntimeOnV2(
       capture.stage = "runtime-skills"
       const server = await createRuntimeSkillSourceServer(args)
       capture.runtimeSkillSource = server
+      failIfInjected("runtime-skills")
       return server
     },
     createManagers: (args) => {
       capture.stage = "managers"
       const managers = createV1Managers(args)
       capture.managers = managers
+      failIfInjected("managers")
       return managers
     },
     createTools: async (args) => {
@@ -248,18 +272,21 @@ export async function assembleV1RuntimeOnV2(
       const result = await createV1Tools(args)
       capture.toolCount = Object.keys(result.filteredTools).length
       capture.skillCount = result.mergedSkills.length
+      failIfInjected("tools")
       return result
     },
     createHooks: (args) => {
       capture.stage = "hooks"
       const created = createV1Hooks(args)
       capture.createdHooks = created
+      failIfInjected("hooks")
       return created
     },
     createPluginInterface: (args) => {
       capture.stage = "plugin-interface"
       const created = createV1PluginInterface(args)
       capture.pluginInterface = created
+      failIfInjected("plugin-interface")
       return created
     },
   })

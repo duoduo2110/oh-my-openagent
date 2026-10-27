@@ -66,13 +66,21 @@ const EXPECTED_TOOLS = [
   "session_search",
 ] as const
 
-/** Gate 2 followup 3: these factories must be absent, the two controls must be present. */
+/**
+ * S4: only the hooks whose *writer* has no V2 counterpart stay off. The four message-reading hooks
+ * were released because `session.messages` now rebuilds real `{info, parts}` from `session.context()`.
+ */
 const EXPECTED_DISABLED_FACTORIES = [
+  "compactionTodoPreserver",
+  "todoContinuationEnforcer",
+] as const
+/**
+ * Released in S4: gone from the default list, and assembled. `preemptive-compaction` is checked only
+ * against the list: its factory additionally sits behind `experimental.preemptive_compaction`.
+ */
+const EXPECTED_RELEASED_FACTORIES = [
   "claudeCodeHooks",
   "compactionContextInjector",
-  "compactionTodoPreserver",
-  "preemptiveCompaction",
-  "todoContinuationEnforcer",
   "sessionNotification",
 ] as const
 const EXPECTED_ENABLED_FACTORIES = ["keywordDetector", "commentChecker"] as const
@@ -179,10 +187,20 @@ async function main(): Promise<void> {
   )
   record(
     "default disabled hooks not assembled",
-    disabledFactories.length === 0 && runtime.report.disabledHooks.length >= 5,
+    disabledFactories.length === 0 && runtime.report.disabledHooks.length >= 2,
     disabledFactories.length === 0
       ? `off=${runtime.report.disabledHooks.join(",")}`
       : `still assembled: ${disabledFactories.join(",")}`,
+  )
+  const releasedFactories = EXPECTED_RELEASED_FACTORIES.filter(
+    (name) => runtime.report.hookFactories[name] !== true,
+  )
+  record(
+    "S4 released hooks are assembled again",
+    releasedFactories.length === 0,
+    releasedFactories.length === 0
+      ? EXPECTED_RELEASED_FACTORIES.join(",")
+      : `still off: ${releasedFactories.join(",")}`,
   )
   const enabledFactories = EXPECTED_ENABLED_FACTORIES.filter(
     (name) => runtime.report.hookFactories[name] !== true,
@@ -343,6 +361,166 @@ async function main(): Promise<void> {
     broken === undefined,
     broken === undefined ? "undefined (setup cannot take the host down)" : "returned a runtime",
   )
+
+  // ---- failed assembly: stage tag, release order, nothing published -------------------------
+  // A real failure has to be injected from inside the assembly (a broken dependency is not a test),
+  // so `failAtStage` throws from the same override the production path runs in. What is asserted is
+  // the contract the catch block owes: the stage is named, everything already built is released in
+  // the documented order exactly once, and the location is left empty instead of half-owned.
+  {
+    const logger = await import("../../shared/logger")
+    const stageLines: string[] = []
+    const originalConsoleError = console.error
+    console.error = (...args: unknown[]): void => {
+      // The adapter prints the stage line to stderr as well as to the plugin log; capture it
+      // instead of letting it look like a crash in the selftest output.
+      stageLines.push(args.map((arg) => String(arg)).join(" "))
+    }
+
+    const readFailureSummary = (logPath: string, stage: string): {
+      stage?: string
+      released?: string[]
+      releaseFailures?: unknown[]
+    } | undefined => {
+      let text = ""
+      try {
+        text = fs.readFileSync(logPath, "utf8")
+      } catch {
+        return undefined
+      }
+      const line = text
+        .split("\n")
+        .find((entry) => entry.includes(`[omo-v2] assembly failed at ${stage}:`))
+      if (line === undefined) return undefined
+      const jsonStart = line.indexOf(' {"stage":')
+      if (jsonStart < 0) return undefined
+      try {
+        return JSON.parse(line.slice(jsonStart + 1)) as {
+          stage?: string
+          released?: string[]
+          releaseFailures?: unknown[]
+        }
+      } catch {
+        return undefined
+      }
+    }
+
+    const logPath = logger.getLogFilePath()
+
+    /**
+     * The release order the failed-assembly path promises, allowing the optional steps that only
+     * exist when that part was built (the runtime skill source is behind a flag). Every observed
+     * step must be one of the allowed ones and appear at most once: a duplicated step is exactly the
+     * "released twice" bug this guards.
+     */
+    const releasedInOrder = (
+      released: readonly string[],
+      expected: readonly string[],
+      allowed: readonly string[],
+    ): boolean => {
+      if (new Set(released).size !== released.length) return false
+      const unexpected = released.filter((step) => !allowed.includes(step))
+      if (unexpected.length > 0) return false
+      let cursor = 0
+      for (const step of released) {
+        if (step === expected[cursor]) cursor += 1
+      }
+      return cursor === expected.length
+    }
+
+    /** Runs one injected assembly and returns what the failure path reported. */
+    const failAssembly = async (stage: "tools" | "hooks"): Promise<{
+      message: string
+      stderr: string
+      summary: { stage?: string; released?: string[]; releaseFailures?: unknown[] } | undefined
+    }> => {
+      const dir = path.join(sandbox, `project-fail-${stage}`)
+      fs.mkdirSync(dir, { recursive: true })
+      stageLines.length = 0
+      let message = ""
+      try {
+        await adapter.assembleV1RuntimeOnV2(
+          createFakeContext(dir) as unknown as V2ContextLike,
+          { failAtStage: stage },
+        )
+        message = "<no throw>"
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      logger._flushForTesting()
+      const summary = readFailureSummary(logPath, stage)
+      record(
+        `injected ${stage} failure leaves nothing published for that location`,
+        adapter._getOpenCodeV2RuntimeForTesting(dir) === undefined
+          && !adapter._runtimeLocationKeysForTesting().includes(dir),
+        `keys=${adapter._runtimeLocationKeysForTesting().join(",") || "<empty>"}`,
+      )
+      // Re-assembling the same location must work: a failed attempt holds no in-flight entry.
+      const retried = await adapter.createOpenCodeV2Runtime(createFakeContext(dir))
+      record(
+        `location is usable again after the injected ${stage} failure`,
+        retried !== undefined,
+        retried === undefined ? "retry returned undefined" : "retry assembled",
+      )
+      await retried?.dispose()
+      return { message, stderr: stageLines.find((line) => line.includes("assembly failed")) ?? "", summary }
+    }
+
+    try {
+      const tools = await failAssembly("tools")
+      record(
+        "injected tools failure is reported at the tools stage",
+        tools.message.includes("injected assembly failure at tools")
+          && tools.stderr.startsWith("[omo-v2] assembly failed at tools:")
+          && tools.summary?.stage === "tools",
+        `message=${tools.message} stderr=${tools.stderr}`,
+      )
+      const toolsReleased = tools.summary?.released ?? []
+      record(
+        "tools failure releases what was built, in order, once",
+        releasedInOrder(
+          toolsReleased,
+          ["tuiStateMirror.stop", "backgroundManager.shutdown", "skillMcpManager.disconnectAll"],
+          ["runtimeSkillSource.stop", "tuiStateMirror.stop", "backgroundManager.shutdown", "skillMcpManager.disconnectAll"],
+        ),
+        `released=${toolsReleased.join(",") || "<none>"} failures=${JSON.stringify(tools.summary?.releaseFailures ?? [])}`,
+      )
+
+      const hooks = await failAssembly("hooks")
+      const hooksReleased = hooks.summary?.released ?? []
+      record(
+        "injected hooks failure is reported at the hooks stage",
+        hooks.message.includes("injected assembly failure at hooks")
+          && hooks.stderr.startsWith("[omo-v2] assembly failed at hooks:")
+          && hooks.summary?.stage === "hooks",
+        `message=${hooks.message} stderr=${hooks.stderr}`,
+      )
+      // Hooks are torn down before the managers they were built on, and no step repeats: a second
+      // release of the same object is what the failed-assembly path must never do.
+      record(
+        "hooks failure releases hooks then managers, in order, once",
+        releasedInOrder(
+          hooksReleased,
+          ["disposeHooks", "tuiStateMirror.stop", "backgroundManager.shutdown", "skillMcpManager.disconnectAll"],
+          ["runtimeSkillSource.stop", "disposeHooks", "tuiStateMirror.stop", "backgroundManager.shutdown", "skillMcpManager.disconnectAll"],
+        ),
+        `released=${hooksReleased.join(",") || "<none>"} failures=${JSON.stringify(hooks.summary?.releaseFailures ?? [])}`,
+      )
+      record(
+        "no release step failed during either cleanup",
+        (tools.summary?.releaseFailures ?? []).length === 0
+          && (hooks.summary?.releaseFailures ?? []).length === 0,
+        `tools=${JSON.stringify(tools.summary?.releaseFailures ?? [])} hooks=${JSON.stringify(hooks.summary?.releaseFailures ?? [])}`,
+      )
+      record(
+        "failed assemblies published no location",
+        adapter._runtimeLocationKeysForTesting().length === 0,
+        adapter._runtimeLocationKeysForTesting().join(",") || "<empty>",
+      )
+    } finally {
+      console.error = originalConsoleError
+    }
+  }
 
   adapter._resetOpenCodeV2RuntimeForTesting()
 }

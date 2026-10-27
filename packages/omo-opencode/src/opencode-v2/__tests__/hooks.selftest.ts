@@ -91,6 +91,8 @@ type Registration = { readonly name: string; readonly callback: (input: unknown)
  */
 function createEventStream(settings: { readonly closeOnAbort?: boolean } = {}): {
   readonly aborted: () => boolean
+  /** How many pumps subscribed: a second install for one location would make this 2. */
+  readonly subscribes: () => number
   readonly push: (event: unknown) => void
   readonly subscribe: (options: { readonly signal: AbortSignal }) => AsyncIterable<unknown>
 } {
@@ -98,6 +100,7 @@ function createEventStream(settings: { readonly closeOnAbort?: boolean } = {}): 
   let waiter: ((result: IteratorResult<unknown>) => void) | undefined
   let closed = false
   let aborted = false
+  let subscribes = 0
 
   const finish = (): void => {
     closed = true
@@ -128,7 +131,9 @@ function createEventStream(settings: { readonly closeOnAbort?: boolean } = {}): 
       }
       queue.push(event)
     },
+    subscribes: () => subscribes,
     subscribe: (options) => {
+      subscribes += 1
       options.signal.addEventListener("abort", () => {
         aborted = true
         if (settings.closeOnAbort !== false) finish()
@@ -148,6 +153,60 @@ function createFakeEditor(tools: Record<string, unknown>[]): Record<string, unkn
     update: (id: unknown, update: (tool: unknown) => void) => {
       const tool = tools.find((entry) => entry["id"] === id)
       if (tool !== undefined) update(tool)
+    },
+  }
+}
+
+/** Everything the fake context records, so a second location gets its own set. */
+type HookContextRecords = {
+  readonly stream: ReturnType<typeof createEventStream>
+  readonly registrations: Registration[]
+  readonly hostTools: Record<string, unknown>[]
+  readonly addedTools: string[]
+  readonly definitionTools: Record<string, unknown>[]
+  /** `transform` registrations disposed; counted per location so cross-location leaks show up. */
+  readonly transform: { count: number }
+}
+
+/** The V2 surface the bridge touches, per location, with every registration recorded. */
+function createHookContext(directory: string, records: HookContextRecords): Record<string, unknown> {
+  const base = createBaseContext(directory)
+  const register = async (name: string, callback: (input: unknown) => unknown) => {
+    const registration: Registration = { name, callback, disposed: false }
+    records.registrations.push(registration)
+    return {
+      dispose: async () => {
+        registration.disposed = true
+      },
+    }
+  }
+  return {
+    ...base,
+    event: { subscribe: records.stream.subscribe },
+    tool: {
+      list: async () => [...records.hostTools],
+      add: async (tool: unknown) => {
+        records.addedTools.push(String((tool as { name?: unknown }).name))
+        return { dispose: async () => undefined }
+      },
+      hook: register,
+      transform: async (callback: (editor: unknown) => unknown) => {
+        await callback(createFakeEditor(records.definitionTools))
+        return {
+          dispose: async () => {
+            records.transform.count += 1
+          },
+        }
+      },
+    },
+    session: {
+      ...(base["session"] as Record<string, unknown>),
+      hook: register,
+    },
+    command: {
+      list: async () => [],
+      transform: async () => ({ dispose: async () => undefined }),
+      reload: async () => undefined,
     },
   }
 }
@@ -193,7 +252,7 @@ async function main(): Promise<void> {
 
   const stream = createEventStream()
   const registrations: Registration[] = []
-  let transformDisposed = 0
+  const transform = { count: 0 }
 
   // The host's tool list, as `tools.ts` (S1a) left it, plus an `add()` recorder: the hook bridge
   // must read this list and never add to it.
@@ -210,48 +269,14 @@ async function main(): Promise<void> {
     { id: "grep", name: "grep", description: "grep description", input: { type: "object" } },
   ]
 
-  const baseContext = createBaseContext(projectDir)
-  const context = {
-    ...baseContext,
-    event: { subscribe: stream.subscribe },
-    tool: {
-      list: async () => [...hostTools],
-      add: async (tool: unknown) => {
-        addedTools.push(String((tool as { name?: unknown }).name))
-        return { dispose: async () => undefined }
-      },
-      hook: async (name: string, callback: (input: unknown) => unknown) => {
-        const registration: Registration = { name, callback, disposed: false }
-        registrations.push(registration)
-        return {
-          dispose: async () => {
-            registration.disposed = true
-          },
-        }
-      },
-      transform: async (callback: (editor: unknown) => unknown) => {
-        await callback(createFakeEditor(definitionTools))
-        return {
-          dispose: async () => {
-            transformDisposed += 1
-          },
-        }
-      },
-    },
-    session: {
-      ...(baseContext["session"] as Record<string, unknown>),
-      hook: async (name: string, callback: (input: unknown) => unknown) => {
-        const registration: Registration = { name, callback, disposed: false }
-        registrations.push(registration)
-        return {
-          dispose: async () => {
-            registration.disposed = true
-          },
-        }
-      },
-    },
-    command: { list: async () => [], transform: async () => ({ dispose: async () => undefined }), reload: async () => undefined },
-  }
+  const context = createHookContext(projectDir, {
+    stream,
+    registrations,
+    hostTools,
+    addedTools,
+    definitionTools,
+    transform,
+  })
 
   const cleanup = await hooksModule.registerOpenCodeV2Hooks(context, runtime)
   pendingCleanups.push(cleanup)
@@ -265,6 +290,12 @@ async function main(): Promise<void> {
     "experimental.session.compacting",
     "experimental.compaction.autocontinue",
     "event",
+    // S2b-2 semantic keys: the real V1 runtime exposes all five.
+    "chat.message",
+    "chat.params",
+    "chat.headers",
+    "experimental.chat.system.transform",
+    "experimental.chat.messages.transform",
   ]
   record(
     "bridged keys",
@@ -273,18 +304,16 @@ async function main(): Promise<void> {
   )
   record(
     "registered V2 slots",
-    registrations.map((entry) => entry.name).sort().join(",") === "compaction,execute.after,execute.before",
+    registrations.map((entry) => entry.name).sort().join(",") === "compaction,context,execute.after,execute.before,http.request,prompt",
     registrations.map((entry) => entry.name).join(","),
   )
 
   // ---- hook disable list + tool ownership --------------------------------------------------
   const disabledNames = snapshot?.disabled ?? []
+  // S4: the two hooks whose writer has no V2 counterpart stay off; the four message-reading ones
+  // were released once `session.messages` returned real parts.
   const expectedDisabled = [
-    "claude-code-hooks",
-    "compaction-context-injector",
     "compaction-todo-preserver",
-    "preemptive-compaction",
-    "session-notification",
     "todo-continuation-enforcer",
   ]
   const missingDisabled = expectedDisabled.filter((name) => !disabledNames.includes(name))
@@ -294,11 +323,7 @@ async function main(): Promise<void> {
     missingDisabled.length === 0 ? disabledNames.join(",") : `missing ${missingDisabled.join(",")}`,
   )
   const factoriesToCheck: ReadonlyArray<readonly [string, string]> = [
-    ["claude-code-hooks", "claudeCodeHooks"],
-    ["compaction-context-injector", "compactionContextInjector"],
     ["compaction-todo-preserver", "compactionTodoPreserver"],
-    ["preemptive-compaction", "preemptiveCompaction"],
-    ["session-notification", "sessionNotification"],
     ["todo-continuation-enforcer", "todoContinuationEnforcer"],
   ]
   const disabledFactories = factoriesToCheck
@@ -307,7 +332,7 @@ async function main(): Promise<void> {
   record(
     "disabled hooks are never assembled (cannot fire)",
     disabledFactories.length === 0,
-    disabledFactories.length === 0 ? "all six factories absent" : `still assembled: ${disabledFactories.join(",")}`,
+    disabledFactories.length === 0 ? "both remaining factories absent" : `still assembled: ${disabledFactories.join(",")}`,
   )
   record(
     "unrelated hooks are still assembled (still fire)",
@@ -599,8 +624,8 @@ async function main(): Promise<void> {
   )
   record(
     "registrations disposed",
-    registrations.every((entry) => entry.disposed) && transformDisposed === 1,
-    `disposed=${registrations.filter((entry) => entry.disposed).length}/${registrations.length} transform=${transformDisposed}`,
+    registrations.every((entry) => entry.disposed) && transform.count === 1,
+    `disposed=${registrations.filter((entry) => entry.disposed).length}/${registrations.length} transform=${transform.count}`,
   )
 
   stream.push({ id: "evt_3", type: "session.idle", data: { sessionID: "ses_selftest" } })
@@ -620,6 +645,163 @@ async function main(): Promise<void> {
     `bridged=${finalSnapshot?.bridged.length ?? 0} stopped=${finalSnapshot?.pump.stopped}`,
   )
 
+  // ---- two locations at once: one bridge each, released independently ----------------------
+  // The bridge map is keyed like the adapter (`ctx.location.directory`). A global install let the
+  // second location take over the first one's bridge, and re-setup of one location installed a
+  // second event pump plus duplicate `execute.before`/`execute.after`/`compaction` registrations.
+  const keysAfterMainTeardown = hooksModule._hookBridgeLocationKeysForTesting()
+  record(
+    "bridge map empty once the first location is released",
+    keysAfterMainTeardown.length === 0,
+    keysAfterMainTeardown.join(",") || "<empty>",
+  )
+
+  const dirA = path.join(sandbox, "location-a")
+  const dirB = path.join(sandbox, "location-b")
+  fs.mkdirSync(dirA, { recursive: true })
+  fs.mkdirSync(dirB, { recursive: true })
+
+  const minimalTools = () => [
+    { name: "grep", description: "Fast content search tool with safety limits (bridged from V1)." },
+  ]
+  const recordsA = {
+    stream: createEventStream(),
+    registrations: [] as Registration[],
+    hostTools: minimalTools(),
+    addedTools: [] as string[],
+    definitionTools: [] as Record<string, unknown>[],
+    transform: { count: 0 },
+  }
+  const recordsB = {
+    stream: createEventStream(),
+    registrations: [] as Registration[],
+    hostTools: minimalTools(),
+    addedTools: [] as string[],
+    definitionTools: [] as Record<string, unknown>[],
+    transform: { count: 0 },
+  }
+  const contextA = createHookContext(dirA, recordsA)
+  const contextB = createHookContext(dirB, recordsB)
+  // B gets a real second V1 runtime, exactly like the adapter hands out one per location.
+  const runtimeB = await adapter.assembleV1RuntimeOnV2(
+    createBaseContext(dirB) as unknown as V2ContextLike,
+  )
+
+  const releaseA = await hooksModule.registerOpenCodeV2Hooks(contextA, runtime)
+  const releaseB = await hooksModule.registerOpenCodeV2Hooks(contextB, runtimeB)
+  pendingCleanups.push(releaseA, releaseB)
+
+  const keysBoth = hooksModule._hookBridgeLocationKeysForTesting()
+  record(
+    "one bridge per location",
+    keysBoth.join("|") === [dirA, dirB].sort().join("|"),
+    keysBoth.join(", "),
+  )
+  record(
+    "each location registers its own V2 slots",
+    recordsA.registrations.length === 6
+      && recordsB.registrations.length === 6
+      && recordsA.registrations.every((entry) => !recordsB.registrations.includes(entry)),
+    `A=${recordsA.registrations.map((entry) => entry.name).sort().join(",")} | B=${recordsB.registrations.map((entry) => entry.name).sort().join(",")}`,
+  )
+  record(
+    "each location gets exactly one event pump",
+    recordsA.stream.subscribes() === 1 && recordsB.stream.subscribes() === 1,
+    `A=${recordsA.stream.subscribes()} B=${recordsB.stream.subscribes()}`,
+  )
+
+  // Same location, same runtime: a reference bump, never a second install.
+  const releaseA2 = await hooksModule.registerOpenCodeV2Hooks(contextA, runtime)
+  pendingCleanups.push(releaseA2)
+  record(
+    "repeat install of one location adds no registration and no pump",
+    recordsA.registrations.length === 6
+      && recordsA.stream.subscribes() === 1
+      && hooksModule._hookBridgeReferencesForTesting(dirA) === 2
+      && hooksModule._hookBridgeReferencesForTesting(dirB) === 1,
+    `slots=${recordsA.registrations.length} subscribes=${recordsA.stream.subscribes()} refsA=${String(hooksModule._hookBridgeReferencesForTesting(dirA))}`,
+  )
+  record(
+    "keyed read returns the bridge of that location",
+    hooksModule.readOpenCodeV2HookBridge(dirA)?.bridged.length === expectedBridged.length
+      && hooksModule.readOpenCodeV2HookBridge(dirB)?.bridged.length === expectedBridged.length,
+    `A=${String(hooksModule.readOpenCodeV2HookBridge(dirA)?.bridged.length)} B=${String(hooksModule.readOpenCodeV2HookBridge(dirB)?.bridged.length)} (expected ${expectedBridged.length})`,
+  )
+
+  // A's pump only consumes A's stream.
+  recordsA.stream.push({ id: "evt_a1", type: "session.idle", data: { sessionID: "ses_a" } })
+  const aCounted = await waitFor(
+    () => (hooksModule.readOpenCodeV2HookBridge(dirA)?.pump.processed ?? 0) >= 1,
+  )
+  record(
+    "pumps are per location (A's event never reaches B)",
+    aCounted
+      && hooksModule.readOpenCodeV2HookBridge(dirA)?.pump.processed === 1
+      && hooksModule.readOpenCodeV2HookBridge(dirB)?.pump.processed === 0,
+    `A=${String(hooksModule.readOpenCodeV2HookBridge(dirA)?.pump.processed)} B=${String(hooksModule.readOpenCodeV2HookBridge(dirB)?.pump.processed)}`,
+  )
+
+  await releaseA2()
+  record(
+    "one of two references released keeps A installed",
+    hooksModule._hookBridgeReferencesForTesting(dirA) === 1
+      && recordsA.stream.aborted() === false
+      && recordsA.registrations.every((entry) => !entry.disposed),
+    `refsA=${String(hooksModule._hookBridgeReferencesForTesting(dirA))} aborted=${recordsA.stream.aborted()}`,
+  )
+
+  await releaseA()
+  record(
+    "A released: dropped from the map, pump aborted, slots and transform disposed",
+    hooksModule._hookBridgeLocationKeysForTesting().join(",") === dirB
+      && recordsA.stream.aborted()
+      && recordsA.registrations.every((entry) => entry.disposed)
+      && recordsA.transform.count === 1,
+    `keys=${hooksModule._hookBridgeLocationKeysForTesting().join(",")} disposed=${recordsA.registrations.filter((entry) => entry.disposed).length}/${recordsA.registrations.length}`,
+  )
+  record(
+    "keyed read keeps A's final snapshot after its release",
+    hooksModule.readOpenCodeV2HookBridge(dirA)?.pump.stopped === true,
+    `stopped=${String(hooksModule.readOpenCodeV2HookBridge(dirA)?.pump.stopped)}`,
+  )
+  record(
+    "B untouched by A's release",
+    hooksModule._hookBridgeReferencesForTesting(dirB) === 1
+      && recordsB.stream.aborted() === false
+      && recordsB.registrations.every((entry) => !entry.disposed)
+      && recordsB.transform.count === 0,
+    `refsB=${String(hooksModule._hookBridgeReferencesForTesting(dirB))} aborted=${recordsB.stream.aborted()} transform=${recordsB.transform.count}`,
+  )
+
+  recordsB.stream.push({ id: "evt_b1", type: "session.idle", data: { sessionID: "ses_b" } })
+  const bCounted = await waitFor(
+    () => (hooksModule.readOpenCodeV2HookBridge(dirB)?.pump.processed ?? 0) >= 1,
+  )
+  record(
+    "B still consumes events after A is gone",
+    bCounted && hooksModule.readOpenCodeV2HookBridge(dirB)?.pump.processed === 1,
+    `B=${String(hooksModule.readOpenCodeV2HookBridge(dirB)?.pump.processed)}`,
+  )
+
+  await releaseA()
+  record(
+    "double release of A cannot touch B",
+    hooksModule._hookBridgeLocationKeysForTesting().join(",") === dirB
+      && recordsB.stream.aborted() === false,
+    `keys=${hooksModule._hookBridgeLocationKeysForTesting().join(",")}`,
+  )
+
+  await releaseB()
+  record(
+    "every bridge released",
+    hooksModule._hookBridgeLocationKeysForTesting().length === 0
+      && recordsB.stream.aborted()
+      && recordsB.registrations.every((entry) => entry.disposed)
+      && hooksModule.readOpenCodeV2HookBridge(dirB)?.pump.stopped === true,
+    `keys=${hooksModule._hookBridgeLocationKeysForTesting().join(",") || "<empty>"} stopped=${String(hooksModule.readOpenCodeV2HookBridge(dirB)?.pump.stopped)}`,
+  )
+
+  await runtimeB.dispose()
   await runtime.dispose()
   hooksModule._resetOpenCodeV2HooksForTesting()
 }

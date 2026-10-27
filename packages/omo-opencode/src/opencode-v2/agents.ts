@@ -44,6 +44,11 @@ import { mergeCategories } from "../shared/merge-categories"
 import { isTaskSystemEnabled } from "../shared/task-system-enabled"
 import { log } from "../shared/logger"
 import { isManagedAgentMarkdown, renderAgentMarkdown } from "./agents/agent-markdown"
+import {
+  overlaysForAgent,
+  resolveAgentToolPermissionOverlay,
+  withToolPermissionOverlay,
+} from "./config-domains/agent-tool-overlay"
 
 export const AGENTS_LOG_PREFIX = "[omo-v2-agents]"
 
@@ -416,6 +421,9 @@ export async function buildBuiltinAgentConfigs(
   }
 
   const ordered = new Map<string, AgentConfig>()
+  // S3b: the V1 `tools` / `permission` switches have no V2 domain; they ride on the agent
+  // markdown frontmatter instead. Only explicitly configured entries are folded in.
+  const overlay = resolveAgentToolPermissionOverlay(pluginConfig)
   for (const name of V2_BUILTIN_AGENT_NAMES) {
     if (isDisabled(name)) continue
     const config = agents.get(name)
@@ -423,7 +431,15 @@ export async function buildBuiltinAgentConfigs(
       warnings.push(`${name}: no config was produced (disabled or dropped by its model requirement)`)
       continue
     }
-    ordered.set(name, config)
+    const overlays = overlaysForAgent(overlay, name)
+    const merged = withToolPermissionOverlay(config, overlays)
+    if (merged !== config) {
+      log(`${AGENTS_LOG_PREFIX} tools/permission overlay`, {
+        agent: name,
+        overlays: overlays.map((entry) => ({ tools: entry.tools, permission: entry.permission, renames: entry.renames })),
+      })
+    }
+    ordered.set(name, merged)
   }
   return { agents: ordered, warnings }
 }

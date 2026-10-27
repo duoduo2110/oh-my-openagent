@@ -53,6 +53,9 @@ S3A_PROJECT_AGENTS="/tmp/omo-v2-s3a-project/.opencode/agent"
 S3A_GLOBAL_AGENTS="/root/.config/opencode/agent"
 S3A_DISABLED_AGENT="momus"
 S3A_EXPECTED_AGENTS="sisyphus hephaestus oracle librarian explore multimodal-looker metis momus atlas sisyphus-junior"
+# S3b config-domain projection: its own throwaway project, so the assertions never depend on S3a's.
+S3B_CONTAINER="omo-v2-serve"
+S3B_PROJECT="/tmp/omo-v2-s3b-project"
 
 compose() { docker compose -f "$COMPOSE_FILE" -p "$PROJECT" "$@"; }
 
@@ -80,9 +83,15 @@ usage() {
                 证据落 .slim/v2-evidence/s2a-<ts>.json
   e2e-s2b1      机械 hook 桥接（S2b-1）：真实 serve 冒烟 event 泵/桥接安装行/无未捕获异常，
                 自测断言每个桥接点真的调用 V1 handler 并回写；证据落 .slim/v2-evidence/s2b1-<ts>.json
+  e2e-s4        client shim 语义对齐 + 语义 hook 桥接（S4/S2b-2）：session.messages 真实 parts、
+                session.todo 读写一致、session.status busy/idle、config.get 非空、五个语义键触发并回写；
+                证据落 .slim/v2-evidence/s4-<ts>.json
   e2e-s3a       内置 10 agent 物化为 V2 可发现的 markdown（S3a）：默认 global scope、/api/agent 名称与 mode、
                 二次 setup 全 skipped、禁用后删除 md、OMO_V2_AGENT_SCOPE=project 反向 opt-in，
                 证据落 .slim/v2-evidence/s3a-<ts>.json
+  e2e-s3b       V1 配置投影到 V2 配置域（S3b）：/api/mcp 出现 4 个内置 MCP、/api/command 出现 6 个内置命令、
+                /api/skill 含随包 18 个 skill、tools/permission 落 agent frontmatter、不支持域有日志；
+                证据落 .slim/v2-evidence/s3b-<ts>.json
   e2e-v1        V1 回归门禁：真实 OpenCode 1.x CLI 加载本仓库插件，断言 V1 装配成功且无任何 V2 提示/探针，
                 证据落 .slim/v2-evidence/e2e-v1-<ts>.log
 
@@ -231,6 +240,24 @@ PY
 # The plugin's own log, as it stands inside the container.
 s3a_plugin_log() { # $1 = output file
   docker exec "$S3A_CONTAINER" bash -lc "cat '${PLUGIN_LOG_FILE}' 2>/dev/null" > "$1" 2>/dev/null || true
+}
+
+# --- S3b helpers ------------------------------------------------------------------------------
+# Start the serve container rooted at the S3b throwaway project.
+s3b_start_serve() {
+  docker rm -f "$S3B_CONTAINER" >/dev/null 2>&1 || true
+  compose rm -sf serve >/dev/null 2>&1 || true
+  compose run -d --service-ports --name "$S3B_CONTAINER" -w "$S3B_PROJECT" serve >/dev/null
+}
+
+# Fetch one V2 HTTP endpoint into a file. $1 = output file, $2 = path.
+s3b_fetch() {
+  curl -fsS --max-time 10 -u "${SERVE_USER}:${SERVE_PASSWORD}" "${SERVE_URL}$2" -o "$1" 2>/dev/null || true
+}
+
+# The plugin's own log, as it stands inside the S3b container.
+s3b_plugin_log() { # $1 = output file
+  docker exec "$S3B_CONTAINER" bash -lc "cat '${PLUGIN_LOG_FILE}' 2>/dev/null" > "$1" 2>/dev/null || true
 }
 
 
@@ -811,7 +838,8 @@ PY
 # Two independent probes, both required:
 #   1. a real OpenCode 2 serve container, whose plugin log must carry the `[omo-v2] runtime
 #      assembled hooks=<n> ... tools=<n> ... managers=<list> agents=<n>` line with sane counts and
-#      no `runtime assembly failed`;
+#      no `[omo-v2] assembly failed at <stage>` line (the adapter's real failure format; this
+#      negative assertion is self-checked against that source line, see assemblyFailureMatcherProved);
 #   2. the adapter selftest, which assembles a second runtime from a fake context and proves the
 #      singleton, the idempotent dispose and the loud "missing method" behaviour.
 cmd_e2e_s2a() {
@@ -893,14 +921,14 @@ YAML
   tail -4 "$selftest_log" | sed 's/^/    /'
 
   python3 - "$plugin_log" "$api_json" "$selftest_status" "$result_file" "$SERVE_URL" \
-    "$PLUGIN_ID_EXPECTED" "$selftest_log" <<'PY' || verdict=$?
+    "$PLUGIN_ID_EXPECTED" "$selftest_log" "$ROOT/packages/omo-opencode/src/opencode-v2/adapter.ts" <<'PY' || verdict=$?
 import datetime
 import json
 import re
 import sys
 
 (plugin_log_path, plugins_path, selftest_status, out_path, serve_url,
- plugin_id, selftest_log_path) = sys.argv[1:8]
+ plugin_id, selftest_log_path, adapter_src_path) = sys.argv[1:9]
 
 ASSEMBLED = re.compile(
     r"\[omo-v2\] runtime assembled hooks=(\d+) hookKeys=(\S*) tools=(\d+) managers=(\S*) agents=(\d+)"
@@ -941,7 +969,24 @@ for line in lines:
             "line": line,
         }
 
-assembly_failures = [line for line in lines if "runtime assembly failed" in line]
+# The adapter prints `[omo-v2] assembly failed at <stage>: <message>` (ASSEMBLY_LOG_PREFIX from
+# adapter.ts). The previous matcher looked for "runtime assembly failed", a string the code has
+# never printed, so `noAssemblyFailure` passed even when an assembly blew up. The prefix is
+# cross-checked against the adapter source and against a probe line in the emitted format below:
+# a stale prefix fails `assemblyFailureMatcherProved` instead of silently passing.
+ASSEMBLY_FAILURE_PREFIX = "[omo-v2] assembly failed at"
+assembly_failures = [line for line in lines if ASSEMBLY_FAILURE_PREFIX in line]
+
+try:
+    adapter_src = open(adapter_src_path, encoding="utf-8").read()
+except Exception:
+    adapter_src = ""
+assembly_failure_matcher_proved = (
+    'export const ASSEMBLY_LOG_PREFIX = "[omo-v2] assembly"' in adapter_src
+    and '${ASSEMBLY_LOG_PREFIX} failed at ${capture.stage}' in adapter_src
+    and ASSEMBLY_FAILURE_PREFIX in "[omo-v2] assembly failed at tools: injected"
+    and "runtime assembly failed" not in adapter_src
+)
 reused = [line for line in lines if "[omo-v2] runtime reused" in line]
 
 hook_keys = assembled["hookKeys"] if assembled else []
@@ -967,6 +1012,21 @@ selftest_passed = bool(
 dispose_proved = "PASS dispose twice" in selftest_text
 reuse_proved = "PASS singleton reuse" in selftest_text
 missing_proved = "PASS missing method throws loudly" in selftest_text
+# Failed assembly (failAtStage injection): stage tag, release order, nothing published, no double
+# release. These are what make the negative serve-log assertion above believable.
+failure_stage_proved = (
+    "PASS injected tools failure is reported at the tools stage" in selftest_text
+    and "PASS injected hooks failure is reported at the hooks stage" in selftest_text
+)
+failure_release_order_proved = (
+    "PASS tools failure releases what was built, in order, once" in selftest_text
+    and "PASS hooks failure releases hooks then managers, in order, once" in selftest_text
+)
+failure_no_double_release_proved = (
+    "PASS no release step failed during either cleanup" in selftest_text
+    and "PASS location is usable again after the injected tools failure" in selftest_text
+    and "PASS location is usable again after the injected hooks failure" in selftest_text
+)
 
 assertions = {
     "pluginActive": plugin_entry is not None and (plugin_entry.get("state") or {}).get("status") == "active",
@@ -978,6 +1038,10 @@ assertions = {
     "managersComplete": len(missing_managers) == 0,
     "agentCount": bool(assembled) and assembled["agents"] == EXPECTED_AGENTS,
     "noAssemblyFailure": len(assembly_failures) == 0,
+    "assemblyFailureMatcherProved": assembly_failure_matcher_proved,
+    "selftestFailureStageProved": failure_stage_proved,
+    "selftestFailureReleaseOrderProved": failure_release_order_proved,
+    "selftestFailureNoDoubleReleaseProved": failure_no_double_release_proved,
     "noDuplicateAssembly": len(reused) == 0,
     "selftestPassed": selftest_passed,
     "selftestDisposeIdempotent": dispose_proved,
@@ -1144,13 +1208,17 @@ REQUIRED_BRIDGED = [
 INSTALLED_MARKER = "[omo-v2] hook bridge installed "
 PUMP_MARKER = "[omo-v2] hook event pump started"
 DISABLED_MARKER = "[omo-v2] hooks disabled:"
+# S4 re-evaluated the list: only the two hooks whose *writer* has no V2 counterpart stay off.
 REQUIRED_DISABLED = [
+    "compaction-todo-preserver",
+    "todo-continuation-enforcer",
+]
+# Released in S4 (real `{info, parts}` from session.context()); they must NOT be disabled again.
+RELEASED_DISABLED = [
     "claude-code-hooks",
     "compaction-context-injector",
-    "compaction-todo-preserver",
     "preemptive-compaction",
     "session-notification",
-    "todo-continuation-enforcer",
 ]
 BRIDGE_TOOLS_MARKER = "[omo-v2] hook tools "
 TOOLS_MARKER = "[omo-v2] tools "
@@ -1220,6 +1288,7 @@ uncaught = [line for line in serve_lines if any(marker in line for marker in UNC
 disabled_line = next((line for line in reversed(lines) if DISABLED_MARKER in line), None)
 disabled_hooks = disabled_from_line(disabled_line) if disabled_line else []
 missing_disabled = [name for name in REQUIRED_DISABLED if name not in disabled_hooks]
+released_but_disabled = [name for name in RELEASED_DISABLED if name in disabled_hooks]
 bridge_tools = last_prefixed_json(lines, BRIDGE_TOOLS_MARKER) or {}
 s1a_tools = last_prefixed_json(lines, TOOLS_MARKER) or {}
 tool_count_before_bridge = s1a_tools.get("count")
@@ -1246,6 +1315,23 @@ definition_proved = "PASS tool.definition writeback: todowrite description" in s
 compaction_proved = "PASS compaction writeback: V1 context in system" in selftest_text
 disabled_proved = "PASS disabled hooks are never assembled (cannot fire)" in selftest_text
 tool_ownership_proved = "PASS tool ownership: grep listed once with the V1 description" in selftest_text
+# Two locations alive at once: the bridge map is keyed like the adapter, so A and B each own exactly
+# one bridge/pump, a repeat install for one key is a reference bump, and A's release never touches B.
+two_locations_proved = (
+    "PASS one bridge per location" in selftest_text
+    and "PASS each location registers its own V2 slots" in selftest_text
+    and "PASS pumps are per location (A's event never reaches B)" in selftest_text
+)
+no_duplicate_install_proved = (
+    "PASS repeat install of one location adds no registration and no pump" in selftest_text
+    and "PASS one of two references released keeps A installed" in selftest_text
+)
+location_release_proved = (
+    "PASS B untouched by A's release" in selftest_text
+    and "PASS B still consumes events after A is gone" in selftest_text
+    and "PASS double release of A cannot touch B" in selftest_text
+    and "PASS every bridge released" in selftest_text
+)
 
 assertions = {
     "pluginActive": plugin_entry is not None and (plugin_entry.get("state") or {}).get("status") == "active",
@@ -1259,6 +1345,7 @@ assertions = {
     "runtimeNotSkipped": len(skipped) == 0,
     "hooksDisabledLogged": disabled_line is not None,
     "hooksDisabledDefaults": len(missing_disabled) == 0,
+    "s4ReleasedHooksNotDisabled": len(released_but_disabled) == 0,
     "hookBridgeToolsProbed": bridge_tools.get("available") is True,
     "toolCountUnchangedByBridge": tool_count_before_bridge is not None
         and tool_count_before_bridge == tool_count_after_bridge,
@@ -1272,6 +1359,9 @@ assertions = {
     "selftestCompactionProved": compaction_proved,
     "selftestDisabledHooksProved": disabled_proved,
     "selftestToolOwnershipProved": tool_ownership_proved,
+    "selftestTwoLocationsProved": two_locations_proved,
+    "selftestNoDuplicateInstallProved": no_duplicate_install_proved,
+    "selftestLocationReleaseProved": location_release_proved,
 }
 
 evidence = {
@@ -1291,6 +1381,8 @@ evidence = {
         "observed": disabled_hooks,
         "required": REQUIRED_DISABLED,
         "missing": missing_disabled,
+        "released": RELEASED_DISABLED,
+        "releasedButDisabled": released_but_disabled,
     },
     "toolOwnership": {
         "s1aCount": tool_count_before_bridge,
@@ -1336,7 +1428,273 @@ PY
     echo "FAIL: S2b-1 断言未通过（详见 $result_file）" >&2
     return 1
   fi
-  echo "OK: S2b-1 通过（event 泵已启动、6 个机械键已桥接、禁用名单已生效、hook 桥接未改动工具表、自测全绿）"
+  echo "OK: S2b-1 通过（event 泵已启动、机械键已桥接、禁用名单已生效、hook 桥接未改动工具表、自测全绿）"
+}
+
+# S4 acceptance: the client shim answers semantically and the semantic hook bridge is live.
+#
+# Two independent probes, both required:
+#   1. a real OpenCode 2 serve container whose plugin log shows
+#        [omo-v2] hook prompt slot bridged        (chat.message)
+#        [omo-v2] hook context slot bridged       (system.transform + messages.transform + chat.params)
+#        [omo-v2] hook http.request slot bridged  (chat.headers)
+#        [omo-v2] hooks disabled: compaction-todo-preserver,todo-continuation-enforcer
+#      and carries no `session.messages` degradation (the S4 fix) and no uncaught exception;
+#   2. the S4 selftest, which drives a fake V2 context through the shim and the real V1 runtime:
+#      non-empty messages with legal parts, a todo write->read round trip, busy+idle status, a
+#      non-empty config.get, and the five semantic hooks firing with their writeback proven.
+cmd_e2e_s4() {
+  mkdir -p "$EVIDENCE_DIR"
+  local ts api_json serve_log plugin_log selftest_log result_file status=1 selftest_status=1 verdict=0
+  ts="$(date +%Y%m%d-%H%M%S)"
+  api_json="$EVIDENCE_DIR/s4-${ts}.plugin.json"
+  serve_log="$EVIDENCE_DIR/s4-${ts}.serve.log"
+  plugin_log="$EVIDENCE_DIR/s4-${ts}.plugin.log"
+  selftest_log="$EVIDENCE_DIR/s4-${ts}.selftest.log"
+  result_file="$EVIDENCE_DIR/s4-${ts}.json"
+
+  # Same port override trick as S2a/S2b-1: a second lane can run its own serve on another port.
+  local compose_files=(-f "$COMPOSE_FILE") port_override=""
+  if [ "${HOST_PORT}" != "14096" ]; then
+    port_override="/tmp/omo-v2-s4-port-${HOST_PORT}.yaml"
+    cat > "$port_override" <<YAML
+services:
+  serve:
+    ports: !override
+      - "127.0.0.1:${HOST_PORT}:4096"
+YAML
+    compose_files+=(-f "$port_override")
+  fi
+
+  s4_compose() { docker compose "${compose_files[@]}" -p "$PROJECT" "$@"; }
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "==> 镜像缺失，先构建 $IMAGE"
+    compose build
+  fi
+
+  echo "==> 构建 V2 插件产物 (dist/index.js)"
+  cmd_build_index
+
+  echo "==> 写入插件目录与 V2 配置: $PLUGIN_DIR"
+  stage_plugin | sed 's/^/    /'
+
+  echo "==> 启动 serve 容器 (宿主 127.0.0.1:${HOST_PORT} -> 4096)"
+  s4_compose rm -sf serve >/dev/null 2>&1 || true
+  # One clean plugin log per run so a stale bridge line can never satisfy the assertions.
+  run_v2 bash -lc "rm -f '${PLUGIN_LOG_FILE}'" >/dev/null 2>&1 || true
+  s4_compose up -d --no-build serve
+
+  local tmp deadline
+  tmp="$(mktemp)"
+  deadline=$(( $(date +%s) + 90 ))
+  while :; do
+    curl -fsS --max-time 3 -u "${SERVE_USER}:${SERVE_PASSWORD}" \
+      "$SERVE_URL/api/plugin" -o "$tmp" 2>/dev/null || true
+    if [ -s "$tmp" ] && api_has_plugin "$tmp"; then
+      status=0
+      break
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "!!! 90s 内 /api/plugin 未出现插件 ${PLUGIN_ID_EXPECTED}" >&2
+      break
+    fi
+    sleep 3
+  done
+  cp "$tmp" "$api_json" 2>/dev/null || true
+  rm -f "$tmp"
+
+  # The logger flushes on a 500ms timer; give it a beat, then snapshot both logs.
+  sleep 2
+  docker exec omo-v2-serve bash -lc "cat '${PLUGIN_LOG_FILE}' 2>/dev/null" > "$plugin_log" 2>/dev/null || true
+  s4_compose logs --no-color --timestamps serve > "$serve_log" 2>&1 || true
+
+  echo "==> S4 自测（假 V2 ctx + 真 V1 运行时）"
+  set +e
+  timeout 300 docker compose -f "$COMPOSE_FILE" -p "$PROJECT" run --rm -T --no-deps v2 \
+    env TMPDIR=/tmp/s4-selftest \
+    bash -lc 'mkdir -p /tmp/s4-selftest && bun packages/omo-opencode/src/opencode-v2/__tests__/s4.selftest.ts' \
+    > "$selftest_log" 2>&1
+  selftest_status=$?
+  set -e
+  grep -E "^FAIL" "$selftest_log" | head -5 | sed 's/^/    /' || true
+  tail -2 "$selftest_log" | sed 's/^/    /'
+
+  python3 - "$plugin_log" "$serve_log" "$api_json" "$selftest_status" "$result_file" "$SERVE_URL" \
+    "$PLUGIN_ID_EXPECTED" "$selftest_log" <<'S4PY' || verdict=$?
+import datetime
+import json
+import re
+import sys
+
+(plugin_log_path, serve_log_path, plugins_path, selftest_status, out_path, serve_url,
+ plugin_id, selftest_log_path) = sys.argv[1:9]
+
+SEMANTIC_SLOTS = {
+    "chat.message": "prompt",
+    "experimental.chat.system.transform": "context",
+    "experimental.chat.messages.transform": "context",
+    "chat.params": "context",
+    "chat.headers": "http.request",
+}
+REQUIRED_DISABLED = ["compaction-todo-preserver", "todo-continuation-enforcer"]
+RELEASED_DISABLED = [
+    "claude-code-hooks",
+    "compaction-context-injector",
+    "preemptive-compaction",
+    "session-notification",
+]
+DISABLED_MARKER = "[omo-v2] hooks disabled:"
+UNCAUGHT_MARKERS = [
+    "Uncaught",
+    "uncaughtException",
+    "UnhandledPromiseRejection",
+    "unhandledRejection",
+    "unhandled promise rejection",
+]
+
+
+def load_json(path, fallback):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return fallback
+
+
+def read_lines(path):
+    try:
+        return open(path, encoding="utf-8", errors="replace").read().splitlines()
+    except Exception:
+        return []
+
+
+def disabled_from_line(line):
+    payload = line.split(DISABLED_MARKER, 1)[1].strip()
+    head = payload.split(" {", 1)[0].strip()
+    return [name for name in head.split(",") if name and name != "<none>"]
+
+
+lines = read_lines(plugin_log_path)
+serve_lines = read_lines(serve_log_path)
+
+slots_bridged = {
+    slot: any(f"[omo-v2] hook {slot} slot bridged" in line for line in lines)
+    for slot in ("prompt", "context", "http.request")
+}
+# A real serve has no user turn in this gate, so per-key firing is proven by the selftest instead.
+semantic_slots_ok = all(slots_bridged.values())
+
+degraded_messages = [line for line in lines if "[omo-v2] degraded session.messages" in line]
+config_source_lines = [line for line in lines if "[omo-v2] config.get source" in line]
+todo_store_lines = [line for line in lines if "[omo-v2] session todo store" in line]
+
+disabled_line = next((line for line in reversed(lines) if DISABLED_MARKER in line), None)
+disabled_hooks = disabled_from_line(disabled_line) if disabled_line else []
+missing_disabled = [name for name in REQUIRED_DISABLED if name not in disabled_hooks]
+released_but_disabled = [name for name in RELEASED_DISABLED if name in disabled_hooks]
+
+uncaught = [line for line in serve_lines if any(marker in line for marker in UNCAUGHT_MARKERS)]
+
+plugins_body = load_json(plugins_path, {"data": []})
+plugin_entry = next((entry for entry in (plugins_body.get("data") or [])
+                     if entry.get("id") == plugin_id), None)
+
+try:
+    selftest_text = open(selftest_log_path, encoding="utf-8", errors="replace").read()
+except Exception:
+    selftest_text = ""
+selftest_match = re.search(r"S4 selftest: (\d+)/(\d+) passed", selftest_text)
+selftest_passed = bool(
+    selftest_status == "0"
+    and selftest_match
+    and selftest_match.group(1) == selftest_match.group(2)
+)
+
+selftest_checks = {
+    "messagesNonEmpty": "PASS session.messages is not empty" in selftest_text,
+    "partsLegal": "PASS session.messages parts are legal V1 parts" in selftest_text,
+    "todoRoundTrip": "PASS session.todo read/write round trip through ctx.storage" in selftest_text,
+    "statusBusyAndIdle": "PASS session.status derives busy AND idle" in selftest_text,
+    "configNotEmpty": "PASS config.get is not empty and carries model/provider/agent" in selftest_text,
+    "fiveKeysBridged": "PASS all five semantic keys bridged" in selftest_text,
+    "promptWriteback": "PASS chat.message writeback: injected text part reaches prompt.text" in selftest_text,
+    "systemWriteback": "PASS system.transform writeback: V1 string lands in SystemPart[]" in selftest_text,
+    "messagesWriteback": "PASS messages.transform writeback: appended V1 part lands in provider content" in selftest_text,
+    "paramsWriteback": "PASS chat.params writeback: temperature + options reach the V2 request options" in selftest_text,
+    "headersWriteback": "PASS chat.headers writeback: header set on the V2 Request" in selftest_text,
+}
+
+assertions = {
+    "pluginActive": plugin_entry is not None and (plugin_entry.get("state") or {}).get("status") == "active",
+    "pluginLogFound": len(lines) > 0,
+    "noUncaughtHostError": len(uncaught) == 0,
+    "semanticSlotsBridged": semantic_slots_ok,
+    "noSessionMessagesDegradation": len(degraded_messages) == 0,
+    "configSourceLogged": len(config_source_lines) >= 1,
+    "todoStoreLogged": len(todo_store_lines) >= 1,
+    "hooksDisabledDefaults": len(missing_disabled) == 0,
+    "s4ReleasedHooksNotDisabled": len(released_but_disabled) == 0,
+    "selftestPassed": selftest_passed,
+    **{f"selftest_{name}": value for name, value in selftest_checks.items()},
+}
+
+evidence = {
+    "stage": "s4",
+    "capturedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "serveUrl": serve_url,
+    "plugin": {"expectedId": plugin_id, "entry": plugin_entry, "active": assertions["pluginActive"]},
+    "bridge": {
+        "semanticSlots": slots_bridged,
+        "slotOf": SEMANTIC_SLOTS,
+        "degradedSessionMessages": degraded_messages,
+        "configSourceLines": config_source_lines,
+        "todoStoreLines": todo_store_lines,
+    },
+    "disabledHooks": {
+        "line": disabled_line,
+        "observed": disabled_hooks,
+        "required": REQUIRED_DISABLED,
+        "missing": missing_disabled,
+        "released": RELEASED_DISABLED,
+        "releasedButDisabled": released_but_disabled,
+    },
+    "host": {"uncaught": uncaught, "serveLogLines": len(serve_lines)},
+    "selftest": {
+        "exit": int(selftest_status),
+        "summary": selftest_match.group(0) if selftest_match else None,
+        "checks": selftest_checks,
+        "artifacts": selftest_log_path,
+    },
+    "artifacts": {"pluginLog": plugin_log_path, "serveLog": serve_log_path, "plugins": plugins_path},
+    "assertions": assertions,
+    "passed": all(assertions.values()),
+}
+
+json.dump(evidence, open(out_path, "w"), indent=2, ensure_ascii=False)
+print(json.dumps({"assertions": assertions,
+                  "slots": slots_bridged,
+                  "disabledHooks": disabled_hooks,
+                  "releasedButDisabled": released_but_disabled,
+                  "uncaught": uncaught[:3]}, indent=2, ensure_ascii=False))
+sys.exit(0 if evidence["passed"] else 1)
+S4PY
+
+  echo "==> 证据: $result_file"
+  echo "==> 插件日志: $plugin_log"
+  echo "==> serve 日志: $serve_log"
+  echo "==> 自测日志: $selftest_log"
+
+  s4_compose rm -sf serve >/dev/null 2>&1 || true
+
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: /api/plugin 未列出 ${PLUGIN_ID_EXPECTED}" >&2
+    return 1
+  fi
+  if [ "$verdict" -ne 0 ]; then
+    echo "FAIL: S4 断言未通过（详见 $result_file）" >&2
+    return 1
+  fi
+  echo "OK: S4 通过（messages/todo/status/config 语义正确，五个语义键已桥接并回写）"
 }
 
 # S3a: the ten built-in agents, materialized as markdown. Four host lifetimes cover the whole story:
@@ -1607,6 +1965,237 @@ PY
   echo "OK: S3a 通过（默认 global scope 写 10 个 agent 且不污染项目，二次 setup 全 skipped，禁用后删除 markdown，project 反向 opt-in 可用）"
 }
 
+cmd_e2e_s3b() {
+  mkdir -p "$EVIDENCE_DIR"
+  local ts work result verdict=0 selftest_status=1
+  ts="$(date +%Y%m%d-%H%M%S)"
+  work="$(mktemp -d)"
+  result="$EVIDENCE_DIR/s3b-${ts}.json"
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "==> 镜像缺失，先构建 $IMAGE"
+    compose build
+  fi
+
+  echo "==> 构建 V2 插件产物 (dist/index.js)"
+  cmd_build_index
+
+  echo "==> 写入插件目录与 V2 配置: $PLUGIN_DIR"
+  stage_plugin | sed 's/^/    /'
+
+  echo "==> 投影自测（MCP 转换 / 6 命令模板 / skill 路径 / tools-permission 改写 / 不支持域）"
+  set +e
+  timeout 300 docker compose -f "$COMPOSE_FILE" -p "$PROJECT" run --rm -T --no-deps v2 \
+    bun packages/omo-opencode/src/opencode-v2/__tests__/config-domains.selftest.ts > "$work/selftest.log" 2>&1
+  selftest_status=$?
+  set -e
+  tail -2 "$work/selftest.log" | sed 's/^/    /'
+
+  echo "==> 准备一次性项目 $S3B_PROJECT，并清空 agent 落盘目录"
+  run_v2 bash -lc "rm -rf '$S3B_PROJECT' '$S3A_GLOBAL_AGENTS'/*.md; mkdir -p '$S3B_PROJECT' '$S3A_GLOBAL_AGENTS'"
+
+  echo "==> 阶段 A：启动 serve（无用户配置）→ 记录第一次投影"
+  s3b_start_serve
+  s3a_wait_plugin 90 || echo "!!! 90s 内 /api/plugin 未出现 ${PLUGIN_ID_EXPECTED}" >&2
+  fetch_agents "$work/a.agents.json"
+  s3b_fetch "$work/a.mcp.json" /api/mcp
+  s3b_fetch "$work/a.command.json" /api/command
+  s3b_fetch "$work/a.skill.json" /api/skill
+  sleep 2
+  s3b_plugin_log "$work/a.log"
+
+  echo "==> 阶段 B：注入显式 tools/permission 配置 → 重启 → 投影进 agent frontmatter"
+  printf '%s' '{"[opencode]":{"disabled_tools":["grep","task"],"agents":{"sisyphus":{"permission":{"bash":"deny"}}}}}' > "$work/omo.jsonc"
+  docker exec "$S3B_CONTAINER" mkdir -p /root/.omo >/dev/null 2>&1 || true
+  docker cp "$work/omo.jsonc" "$S3B_CONTAINER:/root/.omo/omo.jsonc" >/dev/null 2>&1 || true
+  docker restart "$S3B_CONTAINER" >/dev/null 2>&1 || true
+  s3a_wait_plugin 90 || true
+  fetch_agents "$work/b.agents.json"
+  s3b_fetch "$work/b.mcp.json" /api/mcp
+  s3b_fetch "$work/b.command.json" /api/command
+  s3b_fetch "$work/b.skill.json" /api/skill
+  sleep 2
+  s3b_plugin_log "$work/b.log"
+  docker exec "$S3B_CONTAINER" bash -lc "sed -n '1,30p' '$S3A_GLOBAL_AGENTS/sisyphus.md'" > "$work/sisyphus.md" 2>/dev/null || true
+  docker exec "$S3B_CONTAINER" bash -lc "grep -E 'config domain unsupported:' /tmp/oh-my-opencode.log | tail -8" > "$work/unsupported.log" 2>/dev/null || true
+
+  docker rm -f "$S3B_CONTAINER" >/dev/null 2>&1 || true
+  compose rm -sf serve >/dev/null 2>&1 || true
+  run_v2 bash -lc "rm -rf '$S3B_PROJECT' '$S3A_GLOBAL_AGENTS'/*.md /root/.omo/omo.jsonc" || true
+
+  python3 - "$work" "$result" "$SERVE_URL" "$PLUGIN_ID_EXPECTED" "$selftest_status" <<'PY' || verdict=$?
+import datetime
+import json
+import os
+import sys
+
+work, out_path, serve_url, plugin_id, selftest_status = sys.argv[1:6]
+
+EXPECTED_MCPS = ["context7", "grep_app", "lsp", "websearch"]
+EXPECTED_COMMANDS = ["goal", "refactor", "ulw-execute", "stop-continuation", "remove-ai-slops", "hyperplan"]
+# The 18 skills shipped in packages/shared-skills/skills; every one must reach /api/skill.
+EXPECTED_SKILLS = [
+    "ast-grep", "browser", "coding-agent-sessions", "data-scientist", "debugging", "frontend",
+    "git-master", "init-deep", "lsp-setup", "programming", "refactor", "remove-ai-slops",
+    "review-work", "ultimate-browsing", "ulw-execute", "ulw-plan", "ulw-research", "visual-qa",
+]
+UNSUPPORTED = ["provider", "model", "formatter", "agent"]
+
+
+def load(name, fallback):
+    try:
+        return json.load(open(os.path.join(work, name)))
+    except Exception:
+        return fallback
+
+
+def lines(name):
+    try:
+        return [line.rstrip("\n") for line in open(os.path.join(work, name), encoding="utf-8", errors="replace")]
+    except Exception:
+        return []
+
+
+def names(payload):
+    return [entry.get("name") for entry in (payload.get("data") or []) if isinstance(entry, dict)]
+
+
+def summaries(name):
+    payloads = []
+    for line in lines(name):
+        marker = "[omo-v2] config domain summary "
+        if marker not in line:
+            continue
+        try:
+            payloads.append(json.loads(line.split(marker, 1)[1].strip()))
+        except Exception:
+            continue
+    return payloads
+
+
+a_mcp, b_mcp = load("a.mcp.json", {}), load("b.mcp.json", {})
+a_cmd, b_cmd = load("a.command.json", {}), load("b.command.json", {})
+a_skill, b_skill = load("a.skill.json", {}), load("b.skill.json", {})
+b_agents = {entry.get("id"): entry for entry in (load("b.agents.json", {}).get("data") or [])}
+
+a_log, b_log = lines("a.log"), lines("b.log")
+a_sum, b_sum = summaries("a.log"), summaries("b.log")
+a_last = a_sum[-1] if a_sum else {}
+b_last = b_sum[-1] if b_sum else {}
+
+sisyphus_md = "\n".join(lines("sisyphus.md"))
+unsupported_lines = [line for line in lines("unsupported.log") if "config domain unsupported:" in line]
+
+
+def perms(agent, action):
+    return [p for p in b_agents.get(agent, {}).get("permissions", []) if p.get("action") == action]
+
+
+mcp_names = names(b_mcp) or names(a_mcp)
+command_names = names(b_cmd) or names(a_cmd)
+skill_entries = (b_skill or a_skill).get("data") or []
+skill_ids = [entry.get("id") for entry in skill_entries if isinstance(entry, dict)]
+# Only *our* projections are asserted: the host's own builtin skills live at /builtin/*.md.
+skill_paths = [
+    entry.get("path")
+    for entry in skill_entries
+    if isinstance(entry, dict) and entry.get("id") in EXPECTED_SKILLS
+]
+command_counts = {name: command_names.count(name) for name in EXPECTED_COMMANDS}
+
+assertions = {
+    "selftestPassed": selftest_status == "0",
+    # MCP: the four V1 built-ins are on the V2 domain, `lsp` (the only local stdio one) included.
+    "mcpBuiltinsListed": all(name in mcp_names for name in EXPECTED_MCPS),
+    "mcpNoDuplicates": len(mcp_names) == len(set(mcp_names)),
+    "mcpProjectionLogged": any(
+        "config domain mcp callback" in line
+        and all(name in line for name in EXPECTED_MCPS)
+        for line in a_log + b_log
+    ),
+    # Command: the six schema commands, exactly once, with the V1 descriptions.
+    "commandsProjected": all(name in command_names for name in EXPECTED_COMMANDS),
+    "commandsNotDuplicated": all(count == 1 for count in command_counts.values()),
+    "commandProjectionLogged": any(
+        "config domain command callback" in line and '"added":["goal","refactor","ulw-execute"' in line
+        for line in a_log + b_log
+    ),
+    # Skill: every packaged skill is registered on the V2 skill domain with a real file path.
+    "packagedSkillsListed": all(name in skill_ids for name in EXPECTED_SKILLS),
+    "skillPathsAreRealFiles": len(skill_paths) == len(EXPECTED_SKILLS)
+    and all(isinstance(path, str) and path.startswith("/") and "/builtin/" not in path for path in skill_paths),
+    "skillProjectionLogged": any(
+        "config domain skill callback" in line and '"added":18' in line for line in a_log + b_log
+    ),
+    # tools/permission: explicit config lands in the agent frontmatter and in /api/agent.
+    "frontmatterShellDeny": '"shell": deny' in sisyphus_md,
+    "frontmatterSubagentDeny": '"subagent": deny' in sisyphus_md,
+    "frontmatterGrepDeny": '"grep": deny' in sisyphus_md,
+    "apiShellDeny": any(p.get("effect") == "deny" for p in perms("sisyphus", "shell")),
+    "apiSubagentDeny": any(p.get("effect") == "deny" for p in perms("sisyphus", "subagent")),
+    "apiGrepDenyOnEveryAgent": all(
+        any(p.get("effect") == "deny" for p in perms(agent, "grep")) for agent in ("sisyphus", "atlas", "librarian")
+    ),
+    "overlayLogged": any(
+        "config domain tools/permission" in line and '"globalDenied":["grep","subagent"]' in line
+        for line in b_log
+    ),
+    # Unsupported domains: one exact log line each, never a silent success.
+    "unsupportedLogged": all(
+        any(f"[omo-v2] config domain unsupported: {domain}" in line for line in unsupported_lines)
+        for domain in UNSUPPORTED
+    ),
+    "summaryHasAllDomains": b_last.get("unsupported") == UNSUPPORTED,
+}
+
+evidence = {
+    "stage": "s3b",
+    "capturedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "serveUrl": serve_url,
+    "plugin": {"expectedId": plugin_id},
+    "mcp": {"listed": mcp_names, "expected": EXPECTED_MCPS, "raw": b_mcp or a_mcp},
+    "command": {"listed": command_names, "expected": EXPECTED_COMMANDS, "counts": command_counts},
+    "skill": {
+        "count": len(skill_ids),
+        "ids": skill_ids,
+        "expectedPackaged": EXPECTED_SKILLS,
+        "pathsSample": sorted(path for path in skill_paths if isinstance(path, str))[:5],
+    },
+    "agent": {
+        "sisyphusFrontmatter": sisyphus_md.split("---")[1] if sisyphus_md.count("---") >= 2 else sisyphus_md,
+        "sisyphusShell": perms("sisyphus", "shell"),
+        "sisyphusSubagent": perms("sisyphus", "subagent"),
+    },
+    "unsupported": unsupported_lines,
+    "phaseA": {"summary": a_last},
+    "phaseB": {"summary": b_last},
+    "selftestTail": lines("selftest.log")[-3:],
+    "assertions": assertions,
+    "passed": all(assertions.values()),
+}
+
+json.dump(evidence, open(out_path, "w"), indent=2, ensure_ascii=False)
+print(json.dumps({
+    "assertions": assertions,
+    "mcp": mcp_names,
+    "command": command_names,
+    "skillCount": len(skill_ids),
+    "sisyphusShell": perms("sisyphus", "shell"),
+    "sisyphusSubagent": perms("sisyphus", "subagent"),
+}, indent=2, ensure_ascii=False))
+sys.exit(0 if evidence["passed"] else 1)
+PY
+
+  rm -rf "$work"
+  echo "==> 证据: $result"
+
+  if [ "$verdict" -ne 0 ]; then
+    echo "FAIL: S3b 断言未通过（详见 $result）" >&2
+    return 1
+  fi
+  echo "OK: S3b 通过（内置 MCP 4 个进 /api/mcp，6 个内置命令进 /api/command，随包 18 个 skill 进 /api/skill，tools/permission 落 agent frontmatter，不支持域有日志）"
+}
+
 # V1 regression gate. The repository ships one harness but two runtime entries; nothing may make a
 # real OpenCode 1.x host take the V2 path (no "OpenCode 2" notice, no probe file, no probe logs).
 #
@@ -1786,8 +2375,10 @@ main() {
     e2e-s0) cmd_e2e_s0 "$@" ;;
     e2e-s1a) cmd_e2e_s1a "$@" ;;
     e2e-s3a) cmd_e2e_s3a "$@" ;;
+    e2e-s3b) cmd_e2e_s3b "$@" ;;
     e2e-s2a) cmd_e2e_s2a "$@" ;;
     e2e-s2b1) cmd_e2e_s2b1 "$@" ;;
+    e2e-s4) cmd_e2e_s4 "$@" ;;
     e2e-v1) cmd_e2e_v1 "$@" ;;
     -h|--help|help|"") usage ;;
     *)
