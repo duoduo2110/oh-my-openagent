@@ -12,7 +12,7 @@ use core_graphics::geometry::CGPoint;
 use senpi_desktop_core::backend::PointerEvent;
 use senpi_desktop_core::error::{CoreResult, DesktopError};
 
-use super::cgevent::{button_types, click_group_id, modifier_flags, point, quartz_wheel};
+use super::cgevent::{button_types, click_group_id, is_press, modifier_flags, point, quartz_wheel};
 use super::held::{ButtonRoute, Held, HeldButton};
 
 pub(super) fn pointer(
@@ -161,6 +161,9 @@ pub(super) fn post_global_mouse(
     button_number: i64,
     flags: CGEventFlags,
 ) -> CoreResult<()> {
+    if is_press(event_type) {
+        senpi_desktop_core::intervention::check_press()?;
+    }
     let location = point(x, y)?;
     let event = CGEvent::new_mouse_event(source.clone(), event_type, location, button)
         .map_err(|()| DesktopError::input_failed("failed to create a Quartz pointer event"))?;
