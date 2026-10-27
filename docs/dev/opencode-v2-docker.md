@@ -9,7 +9,7 @@
 | --- | --- |
 | `docker/v2/Dockerfile` | 基础镜像：`oven/bun:1.4.4` + `@opencode/cli@2.1.4`（bin 同时提供 `opencode` / `opencode2`）+ curl/jq/git/nodejs/npm/编译工具链，build 阶段校验版本 |
 | `docker/v2/compose.yaml` | `v2`（常驻工具容器）与 `serve`（`opencode2 serve`，宿主 14096 → 容器 4096） |
-| `scripts/v2/docker.sh` | 唯一入口：`build` / `install` / `typecheck` / `test` / `run` / `build-index` / `build-plugin` / `e2e-load` / `e2e-s0` / `e2e-v1` |
+| `scripts/v2/docker.sh` | 唯一入口：`build` / `install` / `typecheck` / `test` / `run` / `build-index` / `build-plugin` / `e2e-load` / `e2e-s0` / `e2e-v1` / `e2e-pack` |
 
 ## 快速开始
 
@@ -19,10 +19,11 @@ scripts/v2/docker.sh install        # 容器内 bun install --frozen-lockfile --
 scripts/v2/docker.sh typecheck      # 容器内 bun run typecheck
 scripts/v2/docker.sh test packages/utils/src/jsonc-parser.test.ts
 scripts/v2/docker.sh run bun run build:omo-schema   # 容器内跑任意脚本（schema 重生成等）
-scripts/v2/docker.sh build-index    # 只产出 V2 插件 bundle dist/index.js（秒级）
+scripts/v2/docker.sh build-index    # 只产出目录插件用的自包含 bundle .slim/v2-bundle/index.js（秒级，不动 dist/index.js）
 scripts/v2/docker.sh e2e-load       # 起 serve 并断言 V2 已加载插件
 scripts/v2/docker.sh e2e-s0         # V2 宿主探针：setup 次数 / 工具 schema / agent 发现 / Bun 运行时
 scripts/v2/docker.sh e2e-v1         # V1 回归门禁：真实 OpenCode 1.x 加载本仓库插件
+scripts/v2/docker.sh e2e-pack       # 发布产物门禁：npm pack → 隔离 HOME 安装 → serve + TUI 断言（需先 build-plugin）
 ```
 
 所有子命令都透传额外参数，例如：
@@ -80,6 +81,38 @@ docker compose -f docker/v2/compose.yaml logs -f serve
 证据写到 `.slim/v2-evidence/`：`e2e-load-<ts>.json`（含响应与插件条目）、`.serve.log`（容器日志）、
 `.plugin.log`（插件启动日志）。
 
+### 两种形态，别混着验
+
+| 形态 | 入口 | 依赖从哪来 | 用哪个门禁 |
+| --- | --- | --- | --- |
+| **目录插件** | `plugins: [{ "package": "<目录>" }]`（目录里的 `package.json` 有 `exports["./server"]`） | 目录里没有 `node_modules`，bundle 必须自包含 | `build-index` + `e2e-load` / `e2e-s*` |
+| **npm 安装** | `plugins: [{ "package": "file:<已安装包目录>" }]`（生产是 `"oh-my-openagent@<version>"`） | 宿主按 npm spec 解析；`zod` 由包自己的 `dependencies` 提供 | `build-plugin` + `e2e-pack` |
+
+发布态 `dist/index.js` 保留 `--external zod`：`zod` 在 `dependencies` 里，npm 安装后一定可解析
+（e2e-pack 断言 `zod-resolvable-from-plugin`）。目录插件形态没有 `node_modules`，所以 `build-index`
+必须去掉 `--external zod` 打成自包含 bundle —— 两个产物的差异是**故意的**，`build-index` 只写
+`.slim/v2-bundle/`，不覆盖 `dist/index.js`。
+
+`@opentui/solid@0.6.8` + `solid-js` 会随 `dependencies` 装进插件自己的 `node_modules`，与宿主二进制里
+内置的那份并存（e2e-pack 记录 `solidCopiesInInstall=1`）。实测**不影响 TUI**：真实 TUI 进程仍
+`stage=setup plugin=oh-my-openagent:tui`、`[tui-sidebar] V2 view rendered`、屏幕出现侧栏 `Models`，
+因此两者继续留在 `dependencies`，没有改成 optional peer。
+
+### V2 的配置键：`plugins` vs `plugin`
+
+容器内实测（最小插件 + 隔离 HOME）：
+
+| 配置 | 结果 |
+| --- | --- |
+| `opencode.json` `plugins: [{ package: "<目录>" }]`（V2 键） | 加载：`source.type=local`、`state.status=active` |
+| `opencode.json` `plugin: ["<目录>"]`（V1 键） | **也能加载**：`source.type=local`、`state.status=active` |
+| `opencode.json` `plugin: ["file:<目录>"]` | 加载失败并明确列出：`state.status=failed` + `Cannot find package 'zod'`（目录里没有依赖） |
+| `opencode.json` `plugins: [{ package: "file:<已安装包>" }]` | 加载：`source.type=package`、`features.tui=true`、`state.status=active` |
+
+结论：V2 容忍 V1 的 `plugin` 键，但**TUI 只读 `cli.json`**。所以安装器在 2.x 宿主上写 V2 原生形态：
+`opencode.json` 写 `plugins: [{ package }]`（同时把本插件的条目从 V1 `plugin` 键移走，避免双加载），
+并额外写/合并 `cli.json` 的 `plugins`；1.x 宿主仍写 `plugin` + `tui.json`，行为不变。
+
 ## 每阶段验收命令
 
 每个阶段收口前，按下面的顺序在容器里跑一遍；宿主只负责 `docker` / `git` / `curl`，不跑 bun、不装依赖。
@@ -91,8 +124,9 @@ docker compose -f docker/v2/compose.yaml logs -f serve
 | 单元/集成 | `scripts/v2/docker.sh test packages/omo-opencode` | 插件本体全量用例（`bun test --timeout 20000`），必须 0 fail |
 | 静态门禁 | `scripts/v2/docker.sh run bun run lint:ratchet` | 复杂度/规模棘轮，baseline 之外不得新增（改结构后先 `run bun run lint:ratchet:update` 再确认 exit 0） |
 | 构建 | `scripts/v2/docker.sh build-plugin` | 根 `bun run build`：lsp 子包 `npm ci`、`dist/index.js` + shim、schema 生成全部要过 |
-| 快速产物 | `scripts/v2/docker.sh build-index` | 只出自包含 `dist/index.js`，e2e 用的就是它 |
+| 快速产物 | `scripts/v2/docker.sh build-index` | 只出自包含 `.slim/v2-bundle/index.js`（目录插件 e2e 用）+ `dist/tui.js`；**不覆盖**发布态 `dist/index.js` |
 | V2 加载 | `scripts/v2/docker.sh e2e-load` | `opencode2 serve` 里插件 id 出现且 `state.status = active`，启动提示落到插件日志 |
+| **发布产物** | `scripts/v2/docker.sh e2e-pack` | 真 `npm pack` → tarball 装进隔离 HOME 的临时插件目录 → 插件 `active`、`tool.list ≥ 50`、`zod` 从安装树可解析、真实 TUI 进程加载 `./tui` 并画出侧栏 |
 | V2 探针 | `scripts/v2/docker.sh e2e-s0` | `setup` 恰好一次、工具 schema 被宿主接受、agent markdown 被发现、Bun 运行时可见 |
 | V1 回归 | `scripts/v2/docker.sh e2e-v1` | 真实 OpenCode 1.x（默认 1.19.4）加载本仓库插件：V1 装配标记存在、omo agent 面出现、日志里无任何 V2 提示/探针 |
 

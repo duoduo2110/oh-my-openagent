@@ -9,6 +9,7 @@ import {
   withPluginEntryName,
   type PluginEntry,
 } from "../../shared"
+import { isOpenCodeV2Host } from "./v2-host"
 import { backupConfigFile } from "./backup-config"
 import { getConfigDir } from "./config-context"
 import { ensureConfigDirectoryExists } from "./ensure-config-directory-exists"
@@ -16,12 +17,19 @@ import { formatErrorWithSuggestion } from "./format-error-with-suggestion"
 import { detectConfigFormat, type ConfigFormat } from "./opencode-config-format"
 import { parseOpenCodeConfigFileWithError, type OpenCodeConfig } from "./parse-opencode-config-file"
 import { getPluginNameWithVersion } from "./plugin-name-with-version"
+import { ensureV2CliPluginEntry, findOurV2PluginSpec, withV2PluginEntry } from "./v2-plugin-config"
 import { checkVersionCompatibility, extractVersionFromPluginEntry } from "./version-compatibility"
 
 type ConfigTarget = {
   readonly format: ConfigFormat
   readonly path: string
   readonly primary: boolean
+}
+
+/** A write also reports the spec that ended up in the config, so `cli.json` can reuse it. */
+type TargetWrite = {
+  readonly result: ConfigMergeResult
+  readonly entrySpec: string | null
 }
 
 function detectConfigFormatInDir(configDir: string): { readonly format: ConfigFormat; readonly path: string } {
@@ -126,7 +134,131 @@ function writePluginEntryToTarget(params: {
   readonly currentVersion: string
   readonly fallbackEntry: string
   readonly preferredSourceEntry: PluginEntry | null
-}): ConfigMergeResult {
+}): TargetWrite {
+  if (isOpenCodeV2Host()) {
+    return writeV2PluginEntryToTarget(params)
+  }
+  return writeV1PluginEntryToTarget(params)
+}
+
+/**
+ * OpenCode 2 writes `plugins: [{ package }]` and drops our entry from the V1 `plugin` key, so a
+ * config that carries both shapes cannot load this plugin twice. Everything else about the write
+ * (backup, version check, foreign entries) matches the V1 path.
+ */
+function writeV2PluginEntryToTarget(params: {
+  readonly target: ConfigTarget
+  readonly currentVersion: string
+  readonly fallbackEntry: string
+  readonly preferredSourceEntry: PluginEntry | null
+}): TargetWrite {
+  const { target, currentVersion, fallbackEntry, preferredSourceEntry } = params
+
+  try {
+    if (target.format === "none") {
+      const { config } = withV2PluginEntry({}, fallbackEntry)
+      writeFileSync(target.path, JSON.stringify(config, null, 2) + "\n")
+      return { result: { success: true, configPath: target.path }, entrySpec: fallbackEntry }
+    }
+
+    const parseResult = parseOpenCodeConfigFileWithError(target.path)
+    if (!parseResult.config) {
+      return {
+        result: {
+          success: false,
+          configPath: target.path,
+          error: parseResult.error ?? "Failed to parse config file",
+        },
+        entrySpec: null,
+      }
+    }
+
+    const config = parseResult.config as unknown as Record<string, unknown>
+    const existingSpec = resolveExistingV2Spec(config)
+    const nextEntry = choosePluginEntry({
+      existingEntry: existingSpec ?? undefined,
+      fallbackEntry,
+      preferredSourceEntry,
+    })
+    const nextSpec = getPluginEntryName(nextEntry)
+
+    if (existingSpec && !preferredSourceEntry) {
+      const installedVersion = extractVersionFromPluginEntry(getPluginEntryName(existingSpec))
+      const compatibility = checkVersionCompatibility(installedVersion, currentVersion)
+
+      if (!compatibility.canUpgrade) {
+        return {
+          result: {
+            success: false,
+            configPath: target.path,
+            error: compatibility.reason ?? "Version compatibility check failed",
+          },
+          entrySpec: null,
+        }
+      }
+
+      const backupResult = backupConfigFile(target.path)
+      if (!backupResult.success) {
+        return {
+          result: {
+            success: false,
+            configPath: target.path,
+            error: `Failed to create backup: ${backupResult.error}`,
+          },
+          entrySpec: null,
+        }
+      }
+    }
+
+    const { config: nextConfig, plugins } = withV2PluginEntry(config, nextSpec)
+
+    if (target.format === "jsonc") {
+      const content = readFileSync(target.path, "utf-8")
+      const formattingOptions = { insertSpaces: true, tabSize: 2, eol: "\n" as const }
+      const edits = modify(content, ["plugins"], plugins, { formattingOptions })
+      if (Object.hasOwn(config, "plugin")) {
+        edits.push(
+          ...modify(content, ["plugin"], nextConfig.plugin, {
+            formattingOptions,
+            getInsertionIndex: () => 0,
+          }),
+        )
+      }
+      writeFileSync(target.path, applyEdits(content, edits))
+    } else {
+      writeFileSync(target.path, JSON.stringify(nextConfig, null, 2) + "\n")
+    }
+
+    return { result: { success: true, configPath: target.path }, entrySpec: nextSpec }
+  } catch (err) {
+    return {
+      result: {
+        success: false,
+        configPath: target.path,
+        error: formatErrorWithSuggestion(err, "update opencode config"),
+      },
+      entrySpec: null,
+    }
+  }
+}
+
+/** Our entry, whether the config already uses the V2 `plugins` key or still carries V1 `plugin`. */
+function resolveExistingV2Spec(config: Record<string, unknown>): string | null {
+  const v2Spec = findOurV2PluginSpec(config)
+  if (v2Spec) return v2Spec
+
+  const v1Plugins = config.plugin
+  if (!Array.isArray(v1Plugins)) return null
+  const entry = (v1Plugins as PluginEntry[]).find(isOurPlugin)
+  return entry ? getPluginEntryName(entry) : null
+}
+
+function writeV1PluginEntryToTarget(params: {
+  readonly target: ConfigTarget
+  readonly currentVersion: string
+  readonly fallbackEntry: string
+  readonly preferredSourceEntry: PluginEntry | null
+}): TargetWrite {
   const { target, currentVersion, fallbackEntry, preferredSourceEntry } = params
   const pluginEntry = choosePluginEntry({
     existingEntry: undefined,
@@ -138,15 +270,18 @@ function writePluginEntryToTarget(params: {
     if (target.format === "none") {
       const config: OpenCodeConfig = { plugin: [pluginEntry] }
       writeFileSync(target.path, JSON.stringify(config, null, 2) + "\n")
-      return { success: true, configPath: target.path }
+      return { result: { success: true, configPath: target.path }, entrySpec: getPluginEntryName(pluginEntry) }
     }
 
     const parseResult = parseOpenCodeConfigFileWithError(target.path)
     if (!parseResult.config) {
       return {
-        success: false,
-        configPath: target.path,
-        error: parseResult.error ?? "Failed to parse config file",
+        result: {
+          success: false,
+          configPath: target.path,
+          error: parseResult.error ?? "Failed to parse config file",
+        },
+        entrySpec: null,
       }
     }
 
@@ -165,18 +300,24 @@ function writePluginEntryToTarget(params: {
 
       if (!compatibility.canUpgrade) {
         return {
-          success: false,
-          configPath: target.path,
-          error: compatibility.reason ?? "Version compatibility check failed",
+          result: {
+            success: false,
+            configPath: target.path,
+            error: compatibility.reason ?? "Version compatibility check failed",
+          },
+          entrySpec: null,
         }
       }
 
       const backupResult = backupConfigFile(target.path)
       if (!backupResult.success) {
         return {
-          success: false,
-          configPath: target.path,
-          error: `Failed to create backup: ${backupResult.error}`,
+          result: {
+            success: false,
+            configPath: target.path,
+            error: `Failed to create backup: ${backupResult.error}`,
+          },
+          entrySpec: null,
         }
       }
     }
@@ -197,12 +338,15 @@ function writePluginEntryToTarget(params: {
       writeFileSync(target.path, JSON.stringify(config, null, 2) + "\n")
     }
 
-    return { success: true, configPath: target.path }
+    return { result: { success: true, configPath: target.path }, entrySpec: getPluginEntryName(nextPluginEntry) }
   } catch (err) {
     return {
-      success: false,
-      configPath: target.path,
-      error: formatErrorWithSuggestion(err, "update opencode config"),
+      result: {
+        success: false,
+        configPath: target.path,
+        error: formatErrorWithSuggestion(err, "update opencode config"),
+      },
+      entrySpec: null,
     }
   }
 }
@@ -226,8 +370,9 @@ export async function addPluginToOpenCodeConfig(currentVersion: string): Promise
   const pluginEntry = await getPluginNameWithVersion(currentVersion, PLUGIN_NAME)
 
   let primaryResult: ConfigMergeResult | null = null
+  const writtenSpecs: { configDir: string; spec: string }[] = []
   for (const target of targets) {
-    const result = writePluginEntryToTarget({
+    const { result, entrySpec } = writePluginEntryToTarget({
       target,
       currentVersion,
       fallbackEntry: pluginEntry,
@@ -235,8 +380,25 @@ export async function addPluginToOpenCodeConfig(currentVersion: string): Promise
     })
 
     if (!result.success) return result
+    if (entrySpec) {
+      writtenSpecs.push({ configDir: dirname(target.path), spec: entrySpec })
+    }
     if (target.primary) {
       primaryResult = result
+    }
+  }
+
+  // OpenCode 2 reads the TUI plugin list from `cli.json`; without it the sidebar/footer slots of
+  // this plugin are unreachable even though the server side loaded. V1 keeps using `tui.json`
+  // (written by `ensureTuiPluginEntry`), so this branch only runs on a 2.x host.
+  if (isOpenCodeV2Host()) {
+    for (const { configDir, spec } of writtenSpecs) {
+      try {
+        ensureV2CliPluginEntry({ configDir, entry: spec })
+      } catch {
+        // The server config is already written and working; a TUI config that cannot be
+        // updated is reported by the caller's own warning path, never as a failed install.
+      }
     }
   }
 

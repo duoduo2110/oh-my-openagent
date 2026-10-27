@@ -230,7 +230,7 @@ describe("V2 TUI entry", () => {
       "prompt.footer.status",
     ])
     expect(host.layerFactories).toHaveLength(1)
-    expect(host.toasts.some((toast) => toast.message.includes("being ported"))).toBe(true)
+    expect(host.toasts.some((toast) => toast.message.includes("OpenCode 2 support is active"))).toBe(true)
 
     await (cleanup as () => void)()
     expect(host.disposedClaims()).toBe(2)
@@ -254,7 +254,7 @@ describe("V2 TUI entry", () => {
     expect(cleanup).toBeUndefined()
   })
 
-  it("shows the ported notice as a single warning toast", () => {
+  it("shows the support notice as a single warning toast", () => {
     // given
     const toasts: Array<{ title: string; message: string; variant: string }> = []
 
@@ -266,6 +266,7 @@ describe("V2 TUI entry", () => {
     // then
     expect(toasts).toHaveLength(1)
     expect(toasts[0]?.variant).toBe("warning")
+    expect(toasts[0]?.message).toContain("V2适配矩阵-OpenCode-V2-Parity.md")
     expect(toasts[0]?.message).not.toContain("install")
   })
 

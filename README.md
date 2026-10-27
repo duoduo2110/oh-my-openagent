@@ -4,8 +4,8 @@
 
 An [OpenCode](https://opencode.ai/docs) plugin: multi-model orchestration, background agents, LSP and AST tools, and a large skill library.
 
-- **OpenCode 1.x** - fully supported.
-- **OpenCode 2** - support is being ported. The plugin loads, but its agents, tools and hooks are not active there yet.
+- **OpenCode 1.x** - fully supported, unchanged.
+- **OpenCode 2** - support is active: registered tools, built-in agents and the hook bridge are wired in. See the parity matrix, [`docs/V2适配矩阵-OpenCode-V2-Parity.md`](docs/V2适配矩阵-OpenCode-V2-Parity.md), for the evidence per capability and the known differences (BTW draft, todo, provider/model config, `task` delegation off by default).
 
 ## Install
 

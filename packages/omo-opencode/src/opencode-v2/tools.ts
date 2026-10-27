@@ -1,5 +1,5 @@
 /**
- * V2 tool assembly (S1a A group, S1b B group).
+ * V2 tool assembly (S1a A group, S1b B group, S1c C group).
  *
  * A group — tools that only need a directory and a config: `grep`, `glob`, `task_get`, `task_list`
  * and the goal trio (`create_goal` / `update_goal` / `get_goal`). They reuse the V1 factories
@@ -10,13 +10,15 @@
  * (`session_*`, `skill`, `skill_mcp`, `look_at`, `task_create`, `task_update`, `interactive_bash`).
  * They are built in `./tools/`, one dependency set per registration, and registered through the same
  * bridge. They are *not* part of `createV2ToolsRecord` (the A record stays the seven names `e2e-s1a`
- * pins); `registerOpenCodeV2Tools` merges the two records for registration only.
+ * pins); `registerOpenCodeV2Tools` merges the records for registration only.
+ *
+ * C group (S1c) — the twenty delegation / background / monitor / team tools, built in `./tools/`
+ * from a manager set (`./tools/deps-c`). They add three bridge settings (see `./tools/index-c`):
+ * errors become readable `{ content }`, the `task` name keeps the host's built-in unless
+ * `OMO_V2_TASK_TOOL=override`, and `team_create.inline_spec` gets its union preprocessed.
  *
  * `edit` is deliberately off by default: the V1 hashline editor has its own validation loop and is
  * not part of the A group, so it stays behind `OMO_V2_ENABLE_EDIT=1` until a later stage.
- *
- * Still not bridged here: task delegation (`task`), background jobs and team/monitor tools — they
- * need managers and a prompt pipeline the V2 port does not expose yet.
  */
 import type { PluginInput } from "@opencode-ai/plugin"
 import type { Context } from "@opencode/plugin/promise/plugin"
@@ -41,6 +43,7 @@ import {
   registerBridgedTool,
   setToolBridgeDirectory,
   setToolBridgePermission,
+  type BridgeMeta,
   type BridgeRegistrationResult,
   type V2ToolEditorLike,
 } from "./tool-bridge"
@@ -49,6 +52,13 @@ import {
   createV2GroupBToolsRecord,
   type V2GroupBSkip,
 } from "./tools/index"
+import {
+  V2_GROUP_C_TOOL_NAMES,
+  createV2GroupCToolsRecord,
+  groupCBridgeMetaFor,
+  type V2GroupCToolSkip,
+  type V2GroupCToolsResult,
+} from "./tools/index-c"
 
 /** Always-on A group. `edit` is the optional eighth tool. */
 export const V2_GROUP_A_TOOL_NAMES = [
@@ -63,6 +73,11 @@ export const V2_GROUP_A_TOOL_NAMES = [
 
 export const V2_OPTIONAL_EDIT_TOOL_NAME = "edit" as const
 export const V2_ENABLE_EDIT_ENV = "OMO_V2_ENABLE_EDIT"
+/**
+ * `task` collides with the host's own delegating tool. The V1 definition replaces it only when the
+ * operator says so; by default the host keeps the name and ours is skipped (and logged).
+ */
+export const V2_TASK_TOOL_ENV = "OMO_V2_TASK_TOOL"
 
 const DESCRIPTION_PREFIX_LENGTH = 80
 
@@ -77,6 +92,9 @@ export type V2ToolRegistrationReport = {
   readonly tools: readonly string[]
   readonly missing: readonly string[]
   readonly skipped: readonly V2GroupBSkip[]
+  /** C-group skips are reported separately: `skipped` stays the B group's contract. */
+  readonly skippedC: readonly V2GroupCToolSkip[]
+  readonly subsystemsC: V2GroupCToolsResult["subsystems"]
   readonly descriptions: Readonly<Record<string, string>>
 }
 
@@ -121,13 +139,41 @@ function readEnableEdit(): boolean {
   return process.env[V2_ENABLE_EDIT_ENV] === "1"
 }
 
+function readTaskToolOverride(): boolean {
+  const value = process.env[V2_TASK_TOOL_ENV]?.trim().toLowerCase()
+  return value === "override" || value === "1" || value === "true"
+}
+
+function toolGroupOf(name: string): "a" | "b" | "c" {
+  if (V2_GROUP_C_TOOL_NAMES.includes(name)) return "c"
+  if ((V2_GROUP_B_TOOL_NAMES as readonly string[]).includes(name)) return "b"
+  return "a"
+}
+
 /**
- * Registers the A group and then the B group on the V2 host, and proves both afterwards.
+ * Bridge settings for one name: the C group contributes its error mode and its union preprocessor,
+ * and the `task` opt-in is decided here so the policy shows up in one place.
  *
- * Every failure is surfaced twice: through the plugin log (so `e2e-s1a` / `e2e-s1b` can assert on
- * it) and through `console.error` (so it is visible in the host's own output instead of
- * disappearing). A failing B dependency set never costs the A group: the A record is built first and
- * is handed to the transform regardless.
+ * Exported for the S1c selftest, which registers through the same function the host setup uses —
+ * a test that re-implemented the policy could pass while the port skipped the wrong name.
+ */
+export function v2ToolBridgeMeta(name: string, taskOverride: boolean): BridgeMeta {
+  const groupC = groupCBridgeMetaFor(name)
+  const meta: BridgeMeta = { name, ...(groupC === undefined ? {} : groupC) }
+  if (name !== "task") return meta
+  // `task` is *our* name for the host's `subagent`: without the opt-in, register nothing at all.
+  return taskOverride
+    ? { ...meta, collisionPolicy: "override" }
+    : { ...meta, skipUnlessEnabled: true }
+}
+
+/**
+ * Registers the A group, then B, then C on the V2 host, and proves all three afterwards.
+ *
+ * Every failure is surfaced twice: through the plugin log (so `e2e-s1a` / `e2e-s1b` / `e2e-s1c` can
+ * assert on it) and through `console.error` (so it is visible in the host's own output instead of
+ * disappearing). A failing B or C dependency set never costs the A group: the A record is built first
+ * and is handed to the transform regardless.
  */
 export async function registerOpenCodeV2Tools(
   context: Context,
@@ -150,9 +196,21 @@ export async function registerOpenCodeV2Tools(
     pluginConfig,
   })
   const filteredGroupB = filterDisabledTools(groupB.tools, pluginConfig.disabled_tools)
-  const recordWithGroupB: ToolsRecord = { ...record, ...filteredGroupB }
-  const expectedNames = Object.keys(recordWithGroupB).sort()
+
+  // C group (S1c): delegation, background, monitor, team. Shares the B dependency set when it
+  // loaded, so one client shim and one skill list serve both groups.
+  const groupC = await createV2GroupCToolsRecord({
+    context: context as unknown as V2ContextLike,
+    directory,
+    pluginConfig,
+    ...(groupB.bridgeDeps === undefined ? {} : { shared: groupB.bridgeDeps }),
+  })
+  const filteredGroupC = filterDisabledTools(groupC.tools, pluginConfig.disabled_tools)
+
+  const recordWithGroups: ToolsRecord = { ...record, ...filteredGroupB, ...filteredGroupC }
+  const expectedNames = Object.keys(recordWithGroups).sort()
   const before = (await context.tool.list()).map((entry) => entry.name).sort()
+  const taskOverride = readTaskToolOverride()
 
   // The host may invoke the transform again on reload; the report keeps the first pass, which is the
   // one that actually crossed the built-in/plugin boundary.
@@ -161,16 +219,16 @@ export async function registerOpenCodeV2Tools(
 
   await context.tool.transform((editor) => {
     const v2Editor = editor as unknown as V2ToolEditorLike
-    for (const [name, definition] of Object.entries(recordWithGroupB)) {
+    for (const [name, definition] of Object.entries(recordWithGroups)) {
       if (registeredByName.has(name)) continue
       try {
-        const result = registerBridgedTool(v2Editor, definition, { name })
+        const result = registerBridgedTool(v2Editor, definition, v2ToolBridgeMeta(name, taskOverride))
         registeredByName.set(name, result)
         failuresByName.delete(name)
         log(`${BRIDGE_LOG_PREFIX} tool registered ${name}`, {
           mode: result.mode,
           replacedBuiltin: result.replacedBuiltin,
-          group: (V2_GROUP_B_TOOL_NAMES as readonly string[]).includes(name) ? "b" : "a",
+          group: toolGroupOf(name),
         })
         continue
       } catch (error) {
@@ -188,9 +246,15 @@ export async function registerOpenCodeV2Tools(
   const registered = [...registeredByName.values()]
   const failures = [...failuresByName.entries()].map(([name, error]) => ({ name, error }))
   const toolNames = listed.map((entry) => entry.name).sort()
-  const skippedNames = groupB.skipped.map((entry) => entry.name)
+  const skippedNames = [...groupB.skipped, ...groupC.skipped].map((entry) => entry.name)
+  // A name the bridge deliberately did not register (`task` by default) is not "missing": the host
+  // owns that capability, and the policy line above says which one.
+  const skippedByPolicy = registered.filter((entry) => entry.mode === "skip").map((entry) => entry.name)
   const missing = expectedNames.filter(
-    (name) => !toolNames.includes(name) && !skippedNames.includes(name),
+    (name) =>
+      !toolNames.includes(name) &&
+      !skippedNames.includes(name) &&
+      !skippedByPolicy.includes(name),
   )
 
   const descriptions: Record<string, string> = {}
@@ -215,6 +279,13 @@ export async function registerOpenCodeV2Tools(
   })
 
   log(`${BRIDGE_LOG_PREFIX} tools`, { count: toolNames.length, tools: toolNames })
+  log(`${BRIDGE_LOG_PREFIX} task tool policy`, {
+    policy: taskOverride ? "override" : "skip",
+    env: V2_TASK_TOOL_ENV,
+    reason: taskOverride
+      ? "the operator asked for the V1 delegation tool to replace the host built-in"
+      : "the host owns `task`; the V1 definition is registered only with OMO_V2_TASK_TOOL=override",
+  })
   log(`${BRIDGE_LOG_PREFIX} tool bridge`, {
     directory,
     enableEdit,
@@ -223,7 +294,10 @@ export async function registerOpenCodeV2Tools(
     failures,
     missing,
     skipped: groupB.skipped,
+    skippedC: groupC.skipped,
+    skippedByPolicy,
     groupB: groupB.deps,
+    groupC: groupC.subsystems,
   })
   log(`${BRIDGE_LOG_PREFIX} tool descriptions`, descriptions)
 
@@ -233,5 +307,13 @@ export async function registerOpenCodeV2Tools(
     log(`${BRIDGE_LOG_PREFIX} tools missing`, { missing })
   }
 
-  return { registered, tools: toolNames, missing, skipped: groupB.skipped, descriptions }
+  return {
+    registered,
+    tools: toolNames,
+    missing,
+    skipped: groupB.skipped,
+    skippedC: groupC.skipped,
+    subsystemsC: groupC.subsystems,
+    descriptions,
+  }
 }

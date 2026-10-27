@@ -15,6 +15,7 @@ import { promptInstallConfig } from "./tui-install-prompts"
 import { starGitHubRepositories } from "./star-request"
 import { getNoModelProvidersWarning, hasAnyConfiguredProvider } from "./provider-availability"
 import { ensureTuiPluginEntry } from "./config-manager/add-tui-plugin-to-tui-config"
+import { isOpenCodeV2Host } from "./config-manager/v2-host"
 import { refreshOpenCodePluginSandboxes } from "./config-manager/refresh-opencode-plugin-sandbox"
 import * as astGrepInstall from "./install-ast-grep-sg"
 
@@ -69,11 +70,14 @@ export async function runTuiInstaller(args: InstallArgs, version: string): Promi
       return 1
     }
     spinner.stop(`Plugin added to ${color.cyan(pluginResult.configPath)}`)
-    try {
-      ensureTuiPluginEntry()
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      p.log.warn(`Could not update OpenCode TUI config: ${message}`)
+    // 2.x hosts read their TUI plugin list from `cli.json`, which addPluginToOpenCodeConfig writes.
+    if (!isOpenCodeV2Host()) {
+      try {
+        ensureTuiPluginEntry()
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        p.log.warn(`Could not update OpenCode TUI config: ${message}`)
+      }
     }
     // See cli-installer.ts: clear OpenCode's per-spec plugin sandboxes for the
     // spec(s) just written so the next OpenCode start loads this version

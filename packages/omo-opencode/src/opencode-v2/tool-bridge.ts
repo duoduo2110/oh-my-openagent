@@ -43,6 +43,9 @@ export const COLLISION_POLICY: Readonly<Record<string, CollisionPolicy>> = {
   grep: "override",
   glob: "override",
   edit: "skip",
+  // The host's delegating tool is `subagent`; the V1 name is `task`. Same job, different name, so
+  // "skip" alone is not enough — `BridgeMeta.skipUnlessEnabled` makes the default "register nothing"
+  // even though no host tool owns the name. `OMO_V2_TASK_TOOL=override` is the opt-in.
   task: "skip",
   session_list: "override",
   session_read: "override",
@@ -54,6 +57,28 @@ export const COLLISION_POLICY: Readonly<Record<string, CollisionPolicy>> = {
   task_create: "override",
   task_update: "override",
   interactive_bash: "override",
+  // C group (S1c). None of these names is a V2 built-in, so the OMO surface owns them outright —
+  // the same reasoning as the B group: the V1 prompts and the team/monitor protocols are written
+  // against exactly these names.
+  call_omo_agent: "override",
+  background_output: "override",
+  background_cancel: "override",
+  monitor_start: "override",
+  monitor_stop: "override",
+  monitor_list: "override",
+  monitor_output: "override",
+  team_create: "override",
+  team_delete: "override",
+  team_shutdown_request: "override",
+  team_approve_shutdown: "override",
+  team_reject_shutdown: "override",
+  team_send_message: "override",
+  team_task_create: "override",
+  team_task_list: "override",
+  team_task_update: "override",
+  team_task_get: "override",
+  team_status: "override",
+  team_list: "override",
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -119,9 +144,37 @@ export type V2ToolEditorLike = {
 /** A V1 tool definition plus the name the host would have registered it under. */
 export type BridgeableTool = ToolDefinition & { readonly name?: string }
 
+/**
+ * How a rejected `execute` reaches the model.
+ *
+ *   "throw"   (default) the V1 contract: the host turns the rejection into a tool error.
+ *   "content" the C group's contract: the tools there depend on optional subsystems (tmux, a model
+ *             provider, a team run, a background manager) and V1 already answers most of those
+ *             paths with text. A readable `Error: <tool>: <reason>` keeps the call's result shape
+ *             `{ content }` and never leaves the model with an empty answer.
+ */
+export type BridgeErrorMode = "throw" | "content"
+
 export type BridgeMeta = {
   /** Tool name in the V2 tool list (`grep`, `task_get`, ...). */
   readonly name: string
+  /**
+   * Normalises the raw arguments *before* the zod parse. Used where a V1 argument is a
+   * `object | string` union (`team_create.inline_spec`): the host validates either branch, and the
+   * preprocessor turns the JSON-string branch into the object branch so one shape reaches the tool.
+   */
+  readonly preprocess?: (rawArgs: unknown) => unknown
+  /** Defaults to `COLLISION_POLICY[name]` (and to `"skip"` for names it does not list). */
+  readonly collisionPolicy?: CollisionPolicy
+  /**
+   * Do not register at all unless a config switch turned this tool on — even when *no* host tool
+   * owns the name. `task` needs this: the V2 host calls its delegator `subagent`, so a
+   * collision-only skip would add a second spawner next to the host's instead of leaving
+   * delegation alone. The skip is logged with the policy on every setup.
+   */
+  readonly skipUnlessEnabled?: boolean
+  /** Defaults to `"throw"`, the V1 behaviour. */
+  readonly errorMode?: BridgeErrorMode
 }
 
 export type BridgeMode = "zod" | "json-schema"
@@ -402,6 +455,35 @@ function parseArgs(v1: ToolDefinition, toolName: string, mode: BridgeMode, rawAr
   }
 }
 
+/** The same parse, after the tool's own argument preprocessor has run. */
+function parsePreprocessedArgs(
+  v1: ToolDefinition,
+  toolName: string,
+  mode: BridgeMode,
+  rawArgs: unknown,
+  preprocess: ((rawArgs: unknown) => unknown) | undefined,
+): unknown {
+  if (preprocess === undefined) return parseArgs(v1, toolName, mode, rawArgs)
+  let input: unknown
+  try {
+    input = preprocess(rawArgs ?? {})
+  } catch (error) {
+    // A preprocessor that cannot read its input is reported, never fatal: the zod parse below gets
+    // the untouched arguments and produces the schema error the model can act on.
+    log(`${BRIDGE_LOG_PREFIX} argument preprocess failed for ${toolName}`, {
+      error: describeError(error),
+    })
+    input = rawArgs ?? {}
+  }
+  return parseArgs(v1, toolName, mode, input)
+}
+
+function errorContent(toolName: string, error: unknown): V2ToolResult {
+  const message = describeError(error)
+  log(`${BRIDGE_LOG_PREFIX} tool failed ${toolName}`, { error: message })
+  return { content: `Error: ${toolName} failed: ${message}` }
+}
+
 export function bridgeTool(v1: ToolDefinition, meta: BridgeMeta, mode: BridgeMode = "zod"): V2ToolRegistration {
   const toolName = meta.name
   if (typeof v1.description !== "string" || v1.description.length === 0) {
@@ -413,11 +495,16 @@ export function bridgeTool(v1: ToolDefinition, meta: BridgeMeta, mode: BridgeMod
     description: v1.description,
     input: mode === "zod" ? zodInputSchema(v1) : jsonSchemaInput(v1),
     execute: async (rawArgs: unknown, v2ctx: V2ToolContextLike): Promise<V2ToolResult> => {
-      const args = parseArgs(v1, toolName, mode, rawArgs)
-      const context = adaptContext(toolName, v2ctx)
       const execute = v1.execute as unknown as (input: unknown, ctx: V1ToolContext) => Promise<unknown>
-      const result = await execute(args, context)
-      return normalizeResult(result)
+      try {
+        const args = parsePreprocessedArgs(v1, toolName, mode, rawArgs, meta.preprocess)
+        const context = adaptContext(toolName, v2ctx)
+        const result = await execute(args, context)
+        return normalizeResult(result)
+      } catch (error) {
+        if (meta.errorMode === "content") return errorContent(toolName, error)
+        throw error
+      }
     },
   }
 }
@@ -449,7 +536,13 @@ export function registerBridgedTool(
 ): BridgeRegistrationResult {
   const toolName = meta.name
   const existing = editor.get(toolName)
-  const policy = COLLISION_POLICY[toolName] ?? "skip"
+  const policy = meta.collisionPolicy ?? COLLISION_POLICY[toolName] ?? "skip"
+
+  if (meta.skipUnlessEnabled === true && existing === undefined) {
+    // No name collision, but this tool is not ours to add by default (see `skipUnlessEnabled`).
+    log(`${BRIDGE_LOG_PREFIX} tool not registered ${toolName} (skip unless enabled; no host tool owns the name)`)
+    return { name: toolName, mode: "skip", replacedBuiltin: false }
+  }
 
   if (existing !== undefined) {
     // A transform can run more than once per host lifetime; a name that already carries our own

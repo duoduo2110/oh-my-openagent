@@ -27,6 +27,7 @@ import { getUnsupportedOpenCodeVersionMessage } from "./minimum-opencode-version
 import { starGitHubRepositories } from "./star-request"
 import { getNoModelProvidersWarning, hasAnyConfiguredProvider } from "./provider-availability"
 import { ensureTuiPluginEntry } from "./config-manager/add-tui-plugin-to-tui-config"
+import { isOpenCodeV2Host } from "./config-manager/v2-host"
 import { refreshOpenCodePluginSandboxes } from "./config-manager/refresh-opencode-plugin-sandbox"
 import * as astGrepInstall from "./install-ast-grep-sg"
 
@@ -109,11 +110,15 @@ export async function runCliInstaller(args: InstallArgs, version: string): Promi
     printSuccess(
       `Plugin ${isUpdate ? "verified" : "added"} ${SYMBOLS.arrow} ${color.dim(pluginResult.configPath)}`,
     )
-    try {
-      ensureTuiPluginEntry()
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      printWarning(`Could not update OpenCode TUI config: ${message}`)
+    // OpenCode 2 keeps its TUI plugin list in `cli.json` (written by addPluginToOpenCodeConfig);
+    // `tui.json` is the 1.x shape and must not be written for a 2.x host.
+    if (!isOpenCodeV2Host()) {
+      try {
+        ensureTuiPluginEntry()
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        printWarning(`Could not update OpenCode TUI config: ${message}`)
+      }
     }
     // OpenCode's Npm.add() never re-resolves a tag while its per-spec sandbox
     // exists, so a stale sandbox would keep serving the previous version even

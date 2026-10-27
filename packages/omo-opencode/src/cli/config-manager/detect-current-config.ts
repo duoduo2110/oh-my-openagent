@@ -5,6 +5,8 @@ import { getOmoConfigPath } from "./config-context"
 import { detectConfigFormat } from "./opencode-config-format"
 import { parseOpenCodeConfigFileWithError } from "./parse-opencode-config-file"
 import { extractVersionFromPluginEntry } from "./version-compatibility"
+import { findOurV2PluginSpec } from "./v2-plugin-config"
+import { isOpenCodeV2Host } from "./v2-host"
 
 function detectProvidersFromOmoConfig(): {
   hasOpenAI: boolean
@@ -141,7 +143,12 @@ export function detectCurrentConfig(): DetectedConfig {
 
   const openCodeConfig = parseResult.config
   const plugins = openCodeConfig.plugin ?? []
-  const ourPluginEntry = findOurPluginEntry(plugins)
+  // A 2.x host may already carry the V2 `plugins` key (written by a previous install), so an
+  // update has to see it as installed instead of reporting a fresh install.
+  const v2PluginEntry = isOpenCodeV2Host()
+    ? findOurV2PluginSpec(openCodeConfig as unknown as Record<string, unknown>)
+    : null
+  const ourPluginEntry = findOurPluginEntry(plugins) ?? v2PluginEntry
   result.isInstalled = !!ourPluginEntry
 
   if (ourPluginEntry) {

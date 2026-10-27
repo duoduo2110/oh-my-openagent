@@ -1,6 +1,6 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test"
 import { execFileSync } from "node:child_process"
-import { existsSync, readdirSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { join, relative, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -239,4 +239,103 @@ describe("published package layout", () => {
     const missingPaths = expectedAssetPaths.filter((expectedPath) => !packedPaths.has(expectedPath))
     expect(missingPaths).toEqual([])
   }, packDryRunTimeoutMs)
+})
+
+type ExportTarget = string | Record<string, string>
+
+function resolveExportTarget(target: unknown): string | null {
+  if (typeof target === "string") return target
+  if (target && typeof target === "object" && !Array.isArray(target)) {
+    const conditional = target as Record<string, unknown>
+    for (const key of ["import", "default", "require"]) {
+      const candidate = conditional[key]
+      if (typeof candidate === "string") return candidate
+    }
+  }
+  return null
+}
+
+function readRootManifest(): Record<string, unknown> {
+  return JSON.parse(readFileSync(join(repositoryRoot, "package.json"), "utf-8")) as Record<string, unknown>
+}
+
+function hostExports(): Record<string, ExportTarget> {
+  const exportsField = readRootManifest().exports
+  expect(exportsField).toBeTruthy()
+  return exportsField as Record<string, ExportTarget>
+}
+
+function distBuilt(): boolean {
+  return existsSync(join(repositoryRoot, "dist/index.js"))
+}
+
+describe("published entrypoints", () => {
+  test("#given the published manifest #when resolving ./server and ./tui #then both declare a file target", () => {
+    // given
+    const exportsField = hostExports()
+
+    // when
+    const serverTarget = resolveExportTarget(exportsField["./server"])
+    const tuiTarget = resolveExportTarget(exportsField["./tui"])
+    const rootImport = resolveExportTarget(exportsField["."])
+
+    // then
+    expect(serverTarget).toBe("./dist/index.js")
+    expect(tuiTarget).toBe("./dist/tui.js")
+    expect(rootImport).toBe("./dist/index.js")
+  })
+
+  test("#given exported entry targets #when checking the built tree #then the referenced files exist", () => {
+    // given
+    const exportsField = hostExports()
+    const targets = ["./server", "./tui", "."].map((key) => ({
+      key,
+      target: resolveExportTarget(exportsField[key]),
+    }))
+
+    // then — without a build there is nothing to point at; a *present* dist must satisfy them.
+    if (!distBuilt()) {
+      console.warn("[package-layout] dist/ is not built; run `bun run build` to cover export targets")
+      return
+    }
+
+    const missing = targets
+      .filter((entry) => entry.target !== null)
+      .map((entry) => join(repositoryRoot, entry.target as string))
+      .filter((absolutePath) => !existsSync(absolutePath))
+      .map((absolutePath) => toPackagePath(absolutePath))
+
+    expect(missing).toEqual([])
+  })
+
+  test("#given a built plugin bundle #when reading dist/index.js #then it carries the OpenCode 2 setup entry", () => {
+    // given
+    if (!distBuilt()) {
+      console.warn("[package-layout] dist/ is not built; run `bun run build` to cover the V2 setup entry")
+      return
+    }
+    const bundlePath = join(repositoryRoot, "dist/index.js")
+
+    // when
+    const bundle = readFileSync(bundlePath, "utf-8")
+
+    // then — V1 keeps the default export, V2 needs the `setup` the host calls per location.
+    expect(bundle).toContain("loaded without the V1 runtime")
+    expect(/\bsetup\s*:/.test(bundle)).toBe(true)
+  })
+
+  test("#given a built plugin bundle #when reading dist/tui.js #then the TUI entry id is present", () => {
+    // given
+    if (!distBuilt()) {
+      console.warn("[package-layout] dist/ is not built; run `bun run build` to cover the TUI entry")
+      return
+    }
+    const tuiBundlePath = join(repositoryRoot, "dist/tui.js")
+
+    // when
+    const tuiBundle = readFileSync(tuiBundlePath, "utf-8")
+
+    // then
+    expect(tuiBundle).toContain("oh-my-openagent:tui")
+  })
 })

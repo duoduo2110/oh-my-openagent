@@ -4,8 +4,8 @@
 
 一个 [OpenCode](https://opencode.ai/docs) 插件：多模型编排、后台 agent、LSP 与 AST 工具，以及一套技能库。
 
-- **OpenCode 1.x**：完整支持。
-- **OpenCode 2**：正在移植。插件可以加载，但 agent、工具与 hook 在 V2 上暂不生效。
+- **OpenCode 1.x**：完整支持，行为不变。
+- **OpenCode 2**：支持已生效——注册工具、内置 agent 与 hook 桥接都已接通。逐项证据与已知差异（BTW 草稿、todo、provider/model 配置、`task` 委派默认关闭）见 [V2 适配矩阵](docs/V2适配矩阵-OpenCode-V2-Parity.md)。
 
 ## 安装
 

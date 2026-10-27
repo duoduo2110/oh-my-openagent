@@ -47,6 +47,11 @@ export type V2GroupBSkip = {
 export type V2GroupBToolsResult = {
   readonly tools: ToolsRecord
   readonly skipped: readonly V2GroupBSkip[]
+  /**
+   * The dependency set itself, so the C group (S1c) can reuse one client shim, one skill list and
+   * one skill-MCP manager instead of building a second set for the same registration.
+   */
+  readonly bridgeDeps?: GroupBToolDeps
   /** Diagnostics the e2e asserts on: what the dependency set actually loaded. */
   readonly deps: {
     readonly skills: number
@@ -159,6 +164,7 @@ export async function createV2GroupBToolsRecord(args: {
   return {
     tools,
     skipped,
+    ...(deps === undefined ? {} : { bridgeDeps: deps }),
     deps: {
       skills: deps?.skillContext.mergedSkills.length ?? 0,
       commands: deps?.commands.length ?? 0,

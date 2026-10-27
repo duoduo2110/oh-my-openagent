@@ -2,7 +2,7 @@
 
 oh-my-openagent (OmO) is an OpenCode plugin. Everything below installs into OpenCode; there is no separate binary to install.
 
-> OpenCode 2 support is being ported. The plugin loads on OpenCode 2, but its agents, tools and hooks are not active there yet. Use OpenCode 1.x for the full plugin.
+> OpenCode 2 is supported for the core surface: registered tools, built-in agents and the hook bridge are active. See the [V2 parity matrix](../V2适配矩阵-OpenCode-V2-Parity.md) for what works and what still differs. OpenCode 1.x is unaffected and keeps the full plugin.
 
 ## Requirements
 

@@ -11,7 +11,7 @@ function recordingContext(): { readonly shown: ShownToast[]; readonly context: P
 }
 
 describe("OpenCode 2 TUI notice", () => {
-  it("shows one warning toast that says V2 support is being ported", () => {
+  it("shows one warning toast that says V2 support is active and points at the matrix", () => {
     // given
     const { shown, context } = recordingContext()
 
@@ -21,7 +21,9 @@ describe("OpenCode 2 TUI notice", () => {
     // then
     expect(shown).toHaveLength(1)
     expect(shown[0]?.variant).toBe("warning")
-    expect(shown[0]?.message).toContain("being ported")
+    expect(shown[0]?.message).toContain("OpenCode 2 support is active")
+    expect(shown[0]?.message).toContain("V2适配矩阵-OpenCode-V2-Parity.md")
+    expect(shown[0]?.message).toContain("OpenCode 1.x is unaffected")
     expect(shown[0]?.message).not.toContain("install")
   })
 

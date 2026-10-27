@@ -107,7 +107,7 @@ describe("OpenCode V1 regression gate", () => {
   it("#given the V1 entry point #when the server hook runs #then the V2 startup notice is never emitted", () => {
     // then
     expect(v1LogSlice).not.toContain(OPENCODE_V2_NOTICE_MESSAGE)
-    expect(v1LogSlice).not.toContain("OpenCode 2 support is being ported")
+    expect(v1LogSlice).not.toContain("OpenCode 2 support is active")
     expect(v1LogSlice).not.toContain("[opencode-v2] loaded without the V1 runtime")
   })
 
