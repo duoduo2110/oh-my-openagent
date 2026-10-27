@@ -65,6 +65,8 @@ usage() {
   e2e-load      起 serve 容器并断言 /api/plugin 已加载本地插件
   e2e-s0        OpenCode V2 宿主探针（S0）：setup 次数 / 工具 schema / agent markdown / Bun 运行时，
                 证据落 .slim/v2-evidence/s0-<ts>.json
+  e2e-s1a       V1 -> V2 工具桥接（S1a）：A 组工具进入 ctx.tool.list()、grep/glob 覆盖内置、
+                zod 直传、无 schema 错误，并跑桥接自测；证据落 .slim/v2-evidence/s1a-<ts>.json
   e2e-v1        V1 回归门禁：真实 OpenCode 1.x CLI 加载本仓库插件，断言 V1 装配成功且无任何 V2 提示/探针，
                 证据落 .slim/v2-evidence/e2e-v1-<ts>.log
 
@@ -512,6 +514,219 @@ PY
   echo "OK: S0 探针通过（setup 次数/工具注册/agent 发现/Bun 运行时，详见证据 JSON）"
 }
 
+# S1a: A-group tools through the V1 -> V2 bridge. Rebuilds the plugin, restarts serve, asserts the
+# seven always-on A-group tools (+ the S0 probe) are visible in `ctx.tool.list()`, that grep/glob
+# replaced the host built-ins, that no schema-vendor error was logged, and finally runs the bridge
+# self-test that proves execute() resolves objects (R1).
+cmd_e2e_s1a() {
+  mkdir -p "$EVIDENCE_DIR"
+  local ts api_json log_file plugin_log selftest_log result_file status=1 selftest_status=1 verdict=0
+  ts="$(date +%Y%m%d-%H%M%S)"
+  api_json="$EVIDENCE_DIR/s1a-${ts}.plugin.json"
+  log_file="$EVIDENCE_DIR/s1a-${ts}.serve.log"
+  plugin_log="$EVIDENCE_DIR/s1a-${ts}.plugin.log"
+  selftest_log="$EVIDENCE_DIR/s1a-${ts}.selftest.log"
+  result_file="$EVIDENCE_DIR/s1a-${ts}.json"
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "==> 镜像缺失，先构建 $IMAGE"
+    compose build
+  fi
+
+  echo "==> 构建 V2 插件产物 (dist/index.js)"
+  cmd_build_index
+
+  echo "==> 写入插件目录与 V2 配置: $PLUGIN_DIR"
+  stage_plugin | sed 's/^/    /'
+
+  echo "==> 启动 serve 容器 (宿主 127.0.0.1:${HOST_PORT} -> 4096)"
+  compose rm -sf serve >/dev/null 2>&1 || true
+  compose up -d --no-build serve
+
+  local tmp deadline
+  tmp="$(mktemp)"
+  deadline=$(( $(date +%s) + 90 ))
+  while :; do
+    curl -fsS --max-time 3 -u "${SERVE_USER}:${SERVE_PASSWORD}" \
+      "$SERVE_URL/api/plugin" -o "$tmp" 2>/dev/null || true
+    if [ -s "$tmp" ] && api_has_plugin "$tmp"; then
+      status=0
+      break
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "!!! 90s 内 /api/plugin 未出现插件 ${PLUGIN_ID_EXPECTED}" >&2
+      break
+    fi
+    sleep 3
+  done
+  cp "$tmp" "$api_json" 2>/dev/null || true
+  rm -f "$tmp"
+
+  # Give the logger's 500ms flush timer a moment, then snapshot the plugin log.
+  sleep 2
+  docker exec omo-v2-serve bash -lc "cat '${PLUGIN_LOG_FILE}' 2>/dev/null" > "$plugin_log" 2>/dev/null || true
+  compose logs --no-color --timestamps serve > "$log_file" 2>&1 || true
+
+  echo "==> 桥接自测（R1：execute 必须返回对象）"
+  set +e
+  timeout 300 docker compose -f "$COMPOSE_FILE" -p "$PROJECT" run --rm -T --no-deps v2 \
+    bun packages/omo-opencode/src/opencode-v2/__tests__/tool-bridge.selftest.ts > "$selftest_log" 2>&1
+  selftest_status=$?
+  set -e
+  tail -3 "$selftest_log" | sed 's/^/    /'
+
+  python3 - "$plugin_log" "$api_json" "$selftest_status" "$result_file" "$SERVE_URL" \
+    "$PLUGIN_ID_EXPECTED" "$selftest_log" <<'PY' || verdict=$?
+import datetime
+import json
+import sys
+
+(plugin_log_path, plugins_path, selftest_status, out_path, serve_url,
+ plugin_id, selftest_log_path) = sys.argv[1:8]
+
+EXPECTED_TOOLS = ["grep", "glob", "task_get", "task_list", "create_goal", "update_goal", "get_goal"]
+PROBE_TOOL = "omo_v2_probe"
+DESCRIPTION_PREFIXES = {
+    "grep": "Fast content search tool with safety limits",
+    "glob": "Fast file pattern matching tool with safety limits",
+}
+SCHEMA_ERROR_MARKERS = ["Schema vendor", "Skipping invalid", "failed to register tool"]
+
+
+def load_json(path, fallback):
+    try:
+        return json.load(open(path))
+    except Exception:
+        return fallback
+
+
+try:
+    lines = open(plugin_log_path, encoding="utf-8", errors="replace").read().splitlines()
+except Exception:
+    lines = []
+
+
+def last_prefixed_json(prefix):
+    for line in reversed(lines):
+        if prefix in line:
+            try:
+                return json.loads(line.split(prefix, 1)[1].strip())
+            except Exception:
+                return None
+    return None
+
+
+tools_payload = last_prefixed_json("[omo-v2] tools ") or {}
+bridge_payload = last_prefixed_json("[omo-v2] tool bridge ") or {}
+descriptions_payload = last_prefixed_json("[omo-v2] tool descriptions ") or {}
+
+listed = list(tools_payload.get("tools") or [])
+missing = [name for name in EXPECTED_TOOLS if name not in listed]
+probe_present = PROBE_TOOL in listed
+
+registered = bridge_payload.get("registered") or []
+modes = {entry.get("name"): entry.get("mode") for entry in registered if isinstance(entry, dict)}
+bridge_failures = bridge_payload.get("failures") or []
+bridge_missing = bridge_payload.get("missing") or []
+
+schema_errors = [line for line in lines if any(marker in line for marker in SCHEMA_ERROR_MARKERS)]
+
+overrides = {
+    name: any(f"[omo-v2] overriding builtin tool {name}" in line for line in lines)
+    for name in ("grep", "glob")
+}
+
+description_ok = {
+    name: str(descriptions_payload.get(name) or "").startswith(prefix)
+    for name, prefix in DESCRIPTION_PREFIXES.items()
+}
+
+try:
+    selftest_tail = open(selftest_log_path, encoding="utf-8", errors="replace").read().splitlines()[-3:]
+except Exception:
+    selftest_tail = []
+
+plugins_body = load_json(plugins_path, {"data": []})
+plugin_entry = next((entry for entry in (plugins_body.get("data") or [])
+                     if entry.get("id") == plugin_id), None)
+
+assertions = {
+    "pluginActive": plugin_entry is not None and (plugin_entry.get("state") or {}).get("status") == "active",
+    "pluginLogFound": len(lines) > 0,
+    "aGroupListed": len(missing) == 0,
+    "probeStillListed": probe_present,
+    "bridgedInToolList": len([name for name in EXPECTED_TOOLS if name in listed]) == len(EXPECTED_TOOLS),
+    "zodDirectAccepted": all(modes.get(name) == "zod" for name in EXPECTED_TOOLS),
+    "noBridgeFailures": len(bridge_failures) == 0 and len(bridge_missing) == 0,
+    "grepOverridesBuiltin": overrides["grep"],
+    "globOverridesBuiltin": overrides["glob"],
+    "descriptionsFromV1": all(description_ok.values()),
+    "noSchemaErrors": len(schema_errors) == 0,
+    "selftestPassed": selftest_status == "0",
+}
+
+evidence = {
+    "stage": "s1a",
+    "capturedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "serveUrl": serve_url,
+    "plugin": {"expectedId": plugin_id, "entry": plugin_entry, "active": assertions["pluginActive"]},
+    "toolList": {
+        "expected": EXPECTED_TOOLS,
+        "probe": PROBE_TOOL,
+        "listed": listed,
+        "missing": missing,
+        "count": tools_payload.get("count"),
+    },
+    "bridge": {
+        "zodDirect": assertions["zodDirectAccepted"],
+        "modes": modes,
+        "registered": registered,
+        "failures": bridge_failures,
+        "missing": bridge_missing,
+        "directory": bridge_payload.get("directory"),
+        "enableEdit": bridge_payload.get("enableEdit"),
+    },
+    "builtinOverrides": overrides,
+    "descriptions": {
+        "prefixes": DESCRIPTION_PREFIXES,
+        "observed": descriptions_payload,
+        "matched": description_ok,
+    },
+    "schemaErrors": schema_errors,
+    "selftest": {
+        "exit": int(selftest_status),
+        "artifacts": selftest_log_path,
+        "tail": selftest_tail,
+    },
+    "artifacts": {"pluginLog": plugin_log_path, "plugins": plugins_path},
+    "assertions": assertions,
+    "passed": all(assertions.values()),
+}
+
+json.dump(evidence, open(out_path, "w"), indent=2, ensure_ascii=False)
+print(json.dumps({"assertions": assertions, "modes": modes,
+                  "missing": missing, "schemaErrors": len(schema_errors),
+                  "overrides": overrides}, indent=2, ensure_ascii=False))
+sys.exit(0 if evidence["passed"] else 1)
+PY
+
+  echo "==> 证据: $result_file"
+  echo "==> 插件日志: $plugin_log"
+  echo "==> 自测日志: $selftest_log"
+
+  compose rm -sf serve >/dev/null 2>&1 || true
+
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL: /api/plugin 未列出 ${PLUGIN_ID_EXPECTED}" >&2
+    return 1
+  fi
+  if [ "$verdict" -ne 0 ]; then
+    echo "FAIL: S1a 断言未通过（详见 $result_file）" >&2
+    return 1
+  fi
+  echo "OK: S1a 通过（A 组 7 个工具 + 探针在 tool.list()，grep/glob 覆盖内置，zod 直传，自测通过）"
+}
+
 
 # V1 regression gate. The repository ships one harness but two runtime entries; nothing may make a
 # real OpenCode 1.x host take the V2 path (no "OpenCode 2" notice, no probe file, no probe logs).
@@ -690,6 +905,7 @@ main() {
     build-index) cmd_build_index "$@" ;;
     e2e-load) cmd_e2e_load "$@" ;;
     e2e-s0) cmd_e2e_s0 "$@" ;;
+    e2e-s1a) cmd_e2e_s1a "$@" ;;
     e2e-v1) cmd_e2e_v1 "$@" ;;
     -h|--help|help|"") usage ;;
     *)
