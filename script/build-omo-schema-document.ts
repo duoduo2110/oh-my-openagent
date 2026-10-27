@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { OmoConfigSchema } from "../packages/omo-config-core/src/schema"
+import { OmoConfigSchema, stripRetiredConfigSurfaces } from "../packages/omo-config-core/src/schema"
 import { createOhMyOpenCodeJsonSchema } from "./build-schema-document"
 import { optionalizeDefaultedProperties } from "./json-schema-defaulted-optional"
 
@@ -19,10 +19,15 @@ function requiredRecord(value: unknown, path: string): Record<string, unknown> {
 }
 
 export function createOmoJsonSchema(): Record<string, unknown> {
-  const jsonSchema = z.toJSONSchema(OmoConfigSchema, {
-    target: "draft-7",
-    unrepresentable: "any",
-  }) as Record<string, unknown>
+  // The loader keeps parsing the retired harness blocks (migration-friendly); the published
+  // artifact must not advertise them, so the generated document is projected through the
+  // external surface definition before it is written.
+  const jsonSchema = stripRetiredConfigSurfaces(
+    z.toJSONSchema(OmoConfigSchema, {
+      target: "draft-7",
+      unrepresentable: "any",
+    }),
+  ) as Record<string, unknown>
   optionalizeDefaultedProperties(jsonSchema)
   const properties = requiredRecord(jsonSchema.properties, "properties")
   const profiles = requiredRecord(properties.profiles, "properties.profiles")

@@ -29,16 +29,12 @@ function job(id: string) {
   return found
 }
 
-function script(name: string): string {
-  return readFileSync(new URL(`../.github/scripts/${name}`, import.meta.url), "utf8")
-}
-
+// The single-harness repository has three macOS parts; the retired standalone editions
+// (codex / senpi) no longer allocate a part of their own.
 const parts = [
   ["lsp", "lsp-daemon-tests"],
   ["shard1", "root-tests-posix-1"],
   ["shard2", "root-tests-posix-2"],
-  ["codex", "codex-platform-tests"],
-  ["senpi", "senpi-tests-posix"],
 ] as const
 
 describe("combined macOS CI execution contract (#9974)", () => {
@@ -80,32 +76,13 @@ describe("combined macOS CI execution contract (#9974)", () => {
       .toBe("bun test --timeout 20000 packages/omo-opencode packages/memory-core")
     expect(steps.find((step) => step.id === "root-tests-posix-2")?.run)
       .toBe("bash .github/scripts/ci-root-shard-2.sh")
-    expect(steps.find((step) => step.id === "codex-platform-tests")?.run).toBe(
-      "bash .github/scripts/ci-codex-platform-build.sh\nbash .github/scripts/ci-codex-platform-node.sh\nbun test packages/omo-opencode/src/cli/cli-installer.platform.test.ts\n",
-    )
-    expect(steps.find((step) => step.id === "senpi-tests-posix")?.run)
-      .toBe("bash .github/scripts/ci-senpi-posix.sh")
-    expect(script("ci-codex-platform-build.sh").trim().split("\n").slice(2)).toEqual([
-      "bun run build:codex-install", "bun run build:git-bash-mcp", "bun run build:lsp-tools-mcp",
-      "bun run build:lsp-daemon", "npm --prefix packages/omo-codex/plugin ci",
-      "bun run --cwd packages/omo-codex/plugin build",
-    ])
-    expect(script("ci-codex-platform-node.sh").trim().split("\n")[2]?.split(" ")).toEqual([
-      "node", "--test",
-      "packages/omo-codex/scripts/install-local.test.mjs",
-      "packages/omo-codex/scripts/install-local-entrypoint.test.mjs",
-      "packages/omo-codex/scripts/install-local-git-bash-preflight.test.mjs",
-      "packages/omo-codex/scripts/install-cli-args.test.mjs",
-      "packages/omo-codex/plugin/test/node-install-surface.test.mjs",
-      "packages/omo-codex/plugin/test/install-time-build-runtime.test.mjs",
-    ])
+    expect(steps.map((step) => step.id)).not.toContain("codex-platform-tests")
+    expect(steps.map((step) => step.id)).not.toContain("senpi-tests-posix")
   })
 
   test.each([
     ["macos-test-1-status", "test", "lsp", "shard1"],
     ["macos-test-2-status", "test", "lsp", "shard2"],
-    ["macos-codex-status", "codex-compatibility", "codex"],
-    ["macos-senpi-status", "senpi-compatibility", "senpi"],
   ])("#given %s #when its status is published #then Ubuntu judges only the corresponding part", (id, name, ...outputs) => {
     if (id === undefined || name === undefined) throw new Error("incomplete status fixture")
     const status = job(id)

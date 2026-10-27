@@ -13,12 +13,12 @@ describe("star-request", () => {
     expect(command).toBe("gh api --silent --method PUT /user/starred/code-yeongyu/oh-my-openagent >/dev/null 2>&1 || true")
   })
 
-  test("stars only the OpenCode repository for opencode platform", async () => {
+  test("stars the plugin repository", async () => {
     // given
     const starred: string[] = []
 
     // when
-    const results = await starGitHubRepositories("opencode", async (repository) => {
+    const results = await starGitHubRepositories(async (repository) => {
       starred.push(repository)
     })
 
@@ -27,42 +27,12 @@ describe("star-request", () => {
     expect(results).toEqual([{ repository: "code-yeongyu/oh-my-openagent", ok: true }])
   })
 
-  test("stars the plugin repository", async () => {
+  test("stars exactly the repositories listed in STAR_REPOSITORIES, in order", async () => {
     // given
     const starred: string[] = []
 
     // when
-    const results = await starGitHubRepositories("codex", async (repository) => {
-      starred.push(repository)
-    })
-
-    // then
-    expect(starred).toEqual(["code-yeongyu/oh-my-openagent"])
-    expect(results).toEqual([
-      { repository: "code-yeongyu/oh-my-openagent", ok: true },
-    ])
-  })
-
-  test("stars both repositories in STAR_REPOSITORIES order for both platform", async () => {
-    // given
-    const starred: string[] = []
-
-    // when
-    const results = await starGitHubRepositories("both", async (repository) => {
-      starred.push(repository)
-    })
-
-    // then
-    expect(starred).toEqual([...STAR_REPOSITORIES])
-    expect(results).toEqual(STAR_REPOSITORIES.map((repository) => ({ repository, ok: true })))
-  })
-
-  test("stars the default repositories for the native-dev platform without adding a new repo", async () => {
-    // given
-    const starred: string[] = []
-
-    // when
-    const results = await starGitHubRepositories("native-dev", async (repository) => {
+    const results = await starGitHubRepositories(async (repository) => {
       starred.push(repository)
     })
 
@@ -74,13 +44,13 @@ describe("star-request", () => {
   test("keeps going when one repository cannot be starred", async () => {
     // given
     // when
-    const results = await starGitHubRepositories("both", async (repository) => {
+    const results = await starGitHubRepositories(async (repository) => {
       if (repository === "code-yeongyu/oh-my-openagent") throw new Error("gh auth missing")
     })
 
     // then
     expect(results).toEqual([
-      { repository: "code-yeongyu/oh-my-openagent", ok: true },
+      { repository: "code-yeongyu/oh-my-openagent", ok: false, error: "gh auth missing" },
     ])
   })
 })

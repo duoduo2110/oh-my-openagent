@@ -47,9 +47,9 @@ Set one key in `omo.json`:
 { "model_profile": "capable" }
 ```
 
-At session start omo walks the chain and applies the first model your connected providers serve, then prints a notice naming the pick and the rungs it skipped. The switch is session-scoped: nothing is written to `settings.json`. Mid-session failures follow Senpi's own retry chains, not the profile.
+At session start omo walks the chain and applies the first model your connected providers serve, then prints a notice naming the pick and the rungs it skipped. The switch is session-scoped: nothing is written to `settings.json`. Mid-session failures follow omo's own retry chains, not the profile.
 
-Want one exact model instead? Put it in the same key: `"model_profile": "anthropic/claude-opus-5-5"`. Anything with a `/` is a pin. The precedence is simple: a `--model` flag or scoped model wins, then a pinned model, then a profile, then Senpi's own default. Leave the key unset and omo doesn't touch the session model at all. Profiles pick the main session model only; categories and curated agents keep their own chains. Full detail in the [omo.json reference](../reference/omo-json.md#model-profiles-native-harness).
+Want one exact model instead? Put it in the same key: `"model_profile": "anthropic/claude-opus-5-5"`. Anything with a `/` is a pin. The precedence is simple: a `--model` flag or scoped model wins, then a pinned model, then a profile, then the plugin default. Leave the key unset and omo doesn't touch the session model at all. Profiles pick the main session model only; categories and curated agents keep their own chains. Full detail in the [omo.json reference](../reference/omo-json.md#model-profiles).
 
 ---
 

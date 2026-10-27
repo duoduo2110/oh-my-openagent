@@ -65,8 +65,7 @@
     "packages/shared-skills/index.mjs",
     "packages/shared-skills/skill-source-filter.d.ts",
     "packages/shared-skills/skill-source-filter.mjs",
-    "packages/shared-skills/skills",
-    "packages/prompts-core/prompts/ultrawork/codex.md"
+    "packages/shared-skills/skills"
   ],
   "exports": {
     ".": {

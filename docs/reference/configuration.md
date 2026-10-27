@@ -84,7 +84,7 @@ Two more shared base keys, read by the Senpi harness, pick the main session mode
 | `model_profiles` | record<string, `{ display_name?, caution?, family?, tier?, models? }`> | Named ordered model chains. A name matching a builtin (`daily-normal`, `daily-heavy`, `geeky-normal`, `geeky-heavy`) replaces it wholesale; any other name adds one. Entries use the same string or object shape as a category chain and may reference `models.<catalog>` entries. |
 | `model_profile` | string | Which chain starts the session: a lane id such as `daily-normal`, or a literal `provider/model` that pins one exact model. Unset applies Daily · Normal (or the first lane that resolves) on a fresh session; the retired `recommended` id does the same. |
 
-Don't confuse these with `profiles.<name>` above: that key swaps configuration layers via `OMO_PROFILE`, while `model_profile` chooses a model within the loaded configuration. Builtin chains, session-start behavior, and override rules are in the [omo.json reference](./omo-json.md#model-profiles-native-harness).
+Don't confuse these with `profiles.<name>` above: that key swaps configuration layers via `OMO_PROFILE`, while `model_profile` chooses a model within the loaded configuration. Builtin chains, session-start behavior, and override rules are in the [omo.json reference](./omo-json.md#model-profiles).
 
 #### Security Invariants
 

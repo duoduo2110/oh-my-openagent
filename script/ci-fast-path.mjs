@@ -76,11 +76,7 @@ function readChangedPaths(input) {
 }
 
 function isWebPath(path) {
-  return (
-    path.startsWith("packages/web/") ||
-    path.startsWith("docs/") ||
-    path === ".github/workflows/web-ci.yml"
-  )
+  return path.startsWith("docs/")
 }
 
 // The non-runtime paths: an explicit

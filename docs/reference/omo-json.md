@@ -346,7 +346,7 @@ A record of short name to catalog entry (`schema/model-catalog.ts`). The canonic
 
 When an agent or category `model` string matches a catalog key, resolution (`models/model-reference-resolution.ts`) swaps in the entry's model id and fills any unset `reasoning` from the entry. Tuning written at the use site always wins. A `[harness]` block (or a profile) can override individual catalog entries for its own view. Catalog cycles are detected and reported as `model_catalog_cycle` diagnostics instead of looping.
 
-### Model profiles (Native harness)
+### Model profiles
 
 A model profile is a named, ordered model chain you pick by lane (Daily / Obsessive × Normal / Heavy) instead of by model id. Two keys drive it (`schema/model-profile.ts`, `schema/config.ts`):
 
@@ -564,7 +564,7 @@ A record of profile name to a partial view (`schema/config.ts` `OmoConfigProfile
 }
 ```
 
-Profiles are inert until activated (see [Profile activation](#profile-activation)). When active, the profile's base keys fold over the shared base, and the profile's harness block folds over the top-level harness block. A config profile is a different thing from a model profile: see [Model profiles](#model-profiles-native-harness).
+Profiles are inert until activated (see [Profile activation](#profile-activation)). When active, the profile's base keys fold over the shared base, and the profile's harness block folds over the top-level harness block. A config profile is a different thing from a model profile: see [Model profiles](#model-profiles).
 
 ### Model references and model strings
 

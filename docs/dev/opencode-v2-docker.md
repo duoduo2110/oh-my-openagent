@@ -9,7 +9,7 @@
 | --- | --- |
 | `docker/v2/Dockerfile` | 基础镜像：`oven/bun:1.4.4` + `@opencode/cli@2.1.4`（bin 同时提供 `opencode` / `opencode2`）+ curl/jq/git/nodejs/npm/编译工具链，build 阶段校验版本 |
 | `docker/v2/compose.yaml` | `v2`（常驻工具容器）与 `serve`（`opencode2 serve`，宿主 14096 → 容器 4096） |
-| `scripts/v2/docker.sh` | 唯一入口：`build` / `install` / `typecheck` / `test` / `build-index` / `build-plugin` / `e2e-load` |
+| `scripts/v2/docker.sh` | 唯一入口：`build` / `install` / `typecheck` / `test` / `run` / `build-index` / `build-plugin` / `e2e-load` / `e2e-s0` / `e2e-v1` |
 
 ## 快速开始
 
@@ -18,8 +18,11 @@ scripts/v2/docker.sh build          # 构建镜像（约 5-8 分钟，取决于�
 scripts/v2/docker.sh install        # 容器内 bun install --frozen-lockfile --ignore-scripts
 scripts/v2/docker.sh typecheck      # 容器内 bun run typecheck
 scripts/v2/docker.sh test packages/utils/src/jsonc-parser.test.ts
+scripts/v2/docker.sh run bun run build:omo-schema   # 容器内跑任意脚本（schema 重生成等）
 scripts/v2/docker.sh build-index    # 只产出 V2 插件 bundle dist/index.js（秒级）
 scripts/v2/docker.sh e2e-load       # 起 serve 并断言 V2 已加载插件
+scripts/v2/docker.sh e2e-s0         # V2 宿主探针：setup 次数 / 工具 schema / agent 发现 / Bun 运行时
+scripts/v2/docker.sh e2e-v1         # V1 回归门禁：真实 OpenCode 1.x 加载本仓库插件
 ```
 
 所有子命令都透传额外参数，例如：
@@ -58,7 +61,7 @@ docker compose -f docker/v2/compose.yaml logs -f serve
 1. 上游 `package.json` 的 `exports["./server"]` 指向 `dist/index.js`，其默认导出带 OpenCode 2 的 `setup`。
 2. `build-index` 用与根 `bun run build` 相同的 `index` 节点打包，但**不加 `--external zod`**，
    得到自包含 bundle —— 目录插件没有自己的 `node_modules`，外部依赖会导致
-   `Cannot find package 'zod'` 加载失败。
+   `Cannot find package 'zod'` 加载失败。产物落在 `.slim/v2-bundle/index.js`（不进 `dist/`、不参与发布）。
 3. `e2e-load` 把 bundle 复制到配置卷里的插件目录
    `/root/.config/opencode/omo-v2-plugin/`，并软链 `skills -> /repo/packages/shared-skills/skills`
    （bundle 会按自身目录读取 `skills/**/SKILL.md`），然后写 `opencode.json`：
@@ -77,19 +80,47 @@ docker compose -f docker/v2/compose.yaml logs -f serve
 证据写到 `.slim/v2-evidence/`：`e2e-load-<ts>.json`（含响应与插件条目）、`.serve.log`（容器日志）、
 `.plugin.log`（插件启动日志）。
 
+## 每阶段验收命令
+
+每个阶段收口前，按下面的顺序在容器里跑一遍；宿主只负责 `docker` / `git` / `curl`，不跑 bun、不装依赖。
+除了 `lint:ratchet`（走 `run`）以外都是一等子命令，失败即非零退出。
+
+| 阶段 | 命令 | 覆盖什么 |
+| --- | --- | --- |
+| 类型 | `scripts/v2/docker.sh typecheck` | 根 `tsc` + 全部 `packages/*` 投影（注意：`*.test.ts` 不在 typecheck 范围内，测试的正确性只有 `test` 能证） |
+| 单元/集成 | `scripts/v2/docker.sh test packages/omo-opencode` | 插件本体全量用例（`bun test --timeout 20000`），必须 0 fail |
+| 静态门禁 | `scripts/v2/docker.sh run bun run lint:ratchet` | 复杂度/规模棘轮，baseline 之外不得新增（改结构后先 `run bun run lint:ratchet:update` 再确认 exit 0） |
+| 构建 | `scripts/v2/docker.sh build-plugin` | 根 `bun run build`：lsp 子包 `npm ci`、`dist/index.js` + shim、schema 生成全部要过 |
+| 快速产物 | `scripts/v2/docker.sh build-index` | 只出自包含 `dist/index.js`，e2e 用的就是它 |
+| V2 加载 | `scripts/v2/docker.sh e2e-load` | `opencode2 serve` 里插件 id 出现且 `state.status = active`，启动提示落到插件日志 |
+| V2 探针 | `scripts/v2/docker.sh e2e-s0` | `setup` 恰好一次、工具 schema 被宿主接受、agent markdown 被发现、Bun 运行时可见 |
+| V1 回归 | `scripts/v2/docker.sh e2e-v1` | 真实 OpenCode 1.x（默认 1.19.4）加载本仓库插件：V1 装配标记存在、omo agent 面出现、日志里无任何 V2 提示/探针 |
+
+几条实践约定：
+
+- **顺序**：`typecheck` → `test` → `lint:ratchet` → `build-plugin` → `e2e-load` / `e2e-s0` / `e2e-v1`。
+  `build-plugin` 会重写 `dist/index.js`（带 node-require-shim），`build-index` 只写 `.slim/v2-bundle/`，
+  两者互不覆盖；`dist` 相关用例（`shared/dist-bundle-*.test.ts`）只有跑过 `build-plugin` 之后才为绿。
+- **单车道**：一次只起一个容器，各 `e2e-*` 会互相清理 `serve` 容器与端口。
+- **证据**：`e2e-*` 的产物统一落 `.slim/v2-evidence/`（`e2e-v1-<ts>.log`、`s0-<ts>.json` 等），
+  汇报时贴证据文件名而不是整段日志。
+
 ## 已知限制
 
 - `install` 用 `--ignore-scripts`：根 `prepare` 会触发完整 `bun run build`，其中 materialize 步骤需要
   git submodule（浅克隆里为空）。构建请显式用 `build-index` / `build-plugin`。
-- `build-plugin`（根 `bun run build`）会跑 codex/senpi/lsp 子构建里的 `npm ci`，可能把 `node_modules`
+- `build-plugin`（根 `bun run build`）会跑 `packages/lsp-*` 子构建里的 `npm ci`，可能把 `node_modules`
   和 `dist` 写进绑定挂载的宿主仓库；只做插件加载验证时用 `build-index`。
 - 容器以 root 运行，绑定挂载里生成的产物（`dist/`）宿主侧属主是 root，必要时 `sudo chown -R $USER dist`。
 - `registry.npmjs.org` 在本机较慢且偶发失败，可用 `BUN_REGISTRY=https://registry.npmmirror.com`。
 - 镜像包含完整编译工具链 + 全局 CLI，体积偏大（约 2.8 GB），换取原生依赖与 e2e 一次成型。
 - bun 的 workspace 链接会在 `packages/*/node_modules` 下留极小的符号链接桩（合计约 0.5 MB，
   已在 `.gitignore` 内）；1.3 GB 真实依赖只在命名卷里。
-- `test` 目前**跑不起来**（不是镜像问题）：全局 preload `test-setup.ts` 要求存在
-  `packages/lsp-daemon/dist`，缺失时会执行 `npm ci && npm run build`，而
-  `packages/lsp-daemon/package-lock.json` 里有 `workspace:*` 依赖，npm 直接
-  `EUNSUPPORTEDPROTOCOL`，bun 在子目录里也无法解析该 workspace 协议。
-  需要先在有 workspace 上下文的根目录预构建出 `packages/lsp-daemon/dist`，`test` 才会进入用例。
+- `test` 的全局 preload `test-setup.ts` 要求存在 `packages/lsp-daemon/dist`；缺失时它会执行
+  `npm ci && npm run build`。两个 vendored 包的 lock 现在都只引用 `file:../lsp-core` /
+  `file:../mcp-stdio-core`（不再有 npm 不认的 `workspace:*`），所以这一步可以直接跑通；
+  首次跑 `test` 仍会比后续慢一个 `npm ci` 的时间。
+- `e2e-v1` 需要网络装 OpenCode 1.x（`opencode-ai@1.19.x`）。1.x 只把 `plugin` 当 npm 包名解析
+  （绝对路径与 `~/.config/opencode/plugin/` 目录在 1.19 已不生效），所以门禁先让 1.x 装一遍包，
+  再把安装目录里的入口替换成本仓库 `dist/index.js`，并用 sha256 证明替换没被重装覆盖。
+  1.x 另有自己的 SQLite schema，门禁给它单独的 `XDG_DATA_HOME`，不碰 V2 的会话库。

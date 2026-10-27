@@ -20,24 +20,6 @@ describe("cli-program", () => {
     expect(installBlock?.[1]).toContain('.alias("setup")')
   })
 
-
-  test("cleanup command exposes uninstall as the user-facing alias", async () => {
-    // given
-    const cliProgramSource = await readFile(
-      path.resolve(import.meta.dir, "cleanup-command.ts"),
-      "utf-8",
-    )
-
-    // when
-    const cleanupBlock = cliProgramSource.match(
-      /program\s*\n\s*\.command\("cleanup"\)([\s\S]*?)\.action\(/,
-    )
-
-    // then
-    expect(cleanupBlock).not.toBeNull()
-    expect(cleanupBlock?.[1]).toContain('.alias("uninstall")')
-  })
-
   test("config migrate command exposes dry-run and JSON-only controls", async () => {
     // given
     const cliProgramSource = await readFile(
@@ -58,7 +40,7 @@ describe("cli-program", () => {
     expect(migrateBlock?.[1]).toContain("runConfigMigrate")
   })
 
-  test("doctor command exposes explicit platform selection for Codex-only diagnostics", async () => {
+  test("doctor command stays OpenCode-only: no harness/platform selection is offered", async () => {
     // given
     const cliProgramSource = await readFile(
       path.resolve(import.meta.dir, "cli-program.ts"),
@@ -72,11 +54,24 @@ describe("cli-program", () => {
 
     // then
     expect(doctorBlock).not.toBeNull()
-    expect(doctorBlock?.[1]).toContain('new Option("--platform <platform>"')
-    expect(doctorBlock?.[1]).toContain('.choices(["opencode", "codex"])')
-    expect(cliProgramSource).toContain(
-      "resolveDoctorTarget(process.env.OMO_INVOCATION_NAME, options.platform ?? rootDoctorPlatform)",
+    expect(doctorBlock?.[1]).toContain('.option("--status"')
+    expect(doctorBlock?.[1]).toContain('.option("--verbose"')
+    expect(doctorBlock?.[1]).toContain('.option("--json"')
+    expect(doctorBlock?.[1]).not.toContain("--platform")
+    expect(cliProgramSource).not.toContain("resolveDoctorTarget")
+    expect(cliProgramSource).not.toContain(".choices([")
+  })
+
+  test("cleanup/uninstall is not registered as a Harness-specific command", async () => {
+    // given
+    const cliProgramSource = await readFile(
+      path.resolve(import.meta.dir, "cli-program.ts"),
+      "utf-8",
     )
+
+    // then
+    expect(cliProgramSource).not.toContain('.command("cleanup")')
+    expect(cliProgramSource).not.toContain("cleanup-command")
   })
 })
 

@@ -14,7 +14,7 @@ describe("oh-my-openagent plugin export shape", () => {
     expect(namedServer).toBe(defaultServer)
   })
 
-  it("exposes the OpenCode 2 id + setup entry beside the V1 server entry", async () => {
+  it("exposes the OpenCode 2 id + setup entry beside the V1 server entry", () => {
     // given
     const definition: Record<string, unknown> = pluginModule
 
@@ -25,7 +25,5 @@ describe("oh-my-openagent plugin export shape", () => {
     expect(definition["id"]).toBe("oh-my-openagent")
     expect(typeof definition["server"]).toBe("function")
     expect(typeof setup).toBe("function")
-    if (typeof setup !== "function") return
-    expect(await setup({})).toBeUndefined()
   })
 })

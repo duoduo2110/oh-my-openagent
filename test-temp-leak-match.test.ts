@@ -28,6 +28,12 @@ describe("isOsCreatedTempEntry (#9766)", () => {
     ["__PSScriptPolicyTest_2D0TPJSQ.GY5.ps1", false],
     ["__PSScriptPolicyTest_2d0tpjsq.gy5.psd1", false],
     ["__PSScriptPolicyTest_dir", false],
+    [".bun-0-ebbfe5f112d1e949.so", true],
+    [".bun-4271-7c1f0a9b33de4c55.dylib", true],
+    [".bun-0-ebbfe5f112d1e949.dll", true],
+    [".bun-0-notahexhash.so", false],
+    [".bun-x-ebbfe5f112d1e949.so", false],
+    [".bun-0-ebbfe5f112d1e949.so.1", false],
   ])("%p is OS-created: %p", (name, expected) => {
     expect(isOsCreatedTempEntry(name)).toBe(expected)
   })

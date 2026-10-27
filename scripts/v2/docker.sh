@@ -24,7 +24,10 @@ EVIDENCE_DIR="$ROOT/.slim/v2-evidence"
 # default export carries the OpenCode 2 `setup`, so e2e stages a self-contained copy
 # of that bundle (plus the skills it reads next to itself) into the config volume.
 PLUGIN_DIR="${OMO_V2_PLUGIN_DIR:-/root/.config/opencode/omo-v2-plugin}"
-REPO_DIST_ENTRY="/repo/dist/index.js"
+# e2e builds its own self-contained bundle outside `dist/`, so a gate run can never leave
+# `dist/index.js` in the no-shim state the `dist-bundle-*` tests reject.
+E2E_BUNDLE_DIR=".slim/v2-bundle"
+REPO_DIST_ENTRY="/repo/${E2E_BUNDLE_DIR}/index.js"
 REPO_SKILLS_DIR="/repo/packages/shared-skills/skills"
 PLUGIN_LOG_FILE="/tmp/oh-my-opencode.log"
 PROBE_AGENT_ID="omo-v2-probe"
@@ -37,6 +40,11 @@ PLUGIN_ID_EXPECTED="${OMO_V2_PLUGIN_ID:-oh-my-openagent}"
 SERVE_USER="opencode"
 SERVE_PASSWORD="${OMO_V2_SERVER_PASSWORD:-omov2-local}"
 NOTICE_MARKER="[opencode-v2] loaded without the V1 runtime"
+# OpenCode 1.x gate: the host CLI, its plugin package name, and the port the gate serves on.
+V1_PREFIX="${OMO_V1_PREFIX:-/opt/opencode1}"
+V1_VERSION="${OMO_V1_VERSION:-1.19.4}"
+V1_PORT="${OMO_V1_PORT:-4199}"
+V1_PLUGIN_PACKAGE="${OMO_V1_PLUGIN_PACKAGE:-oh-my-openagent}"
 
 compose() { docker compose -f "$COMPOSE_FILE" -p "$PROJECT" "$@"; }
 
@@ -51,17 +59,23 @@ usage() {
   install       容器内 bun install --frozen-lockfile --ignore-scripts
   typecheck     容器内 bun run typecheck
   test [path]   容器内 bun test --timeout 20000 [path...]
+  run <cmd...>  容器内执行任意命令（schema 重生成、vendored npm ci、版本探测）
   build-index   只构建 V2 插件产物 dist/index.js（自包含，e2e 用）
   build-plugin  容器内 bun run build（根脚本，含全部子构建）
   e2e-load      起 serve 容器并断言 /api/plugin 已加载本地插件
   e2e-s0        OpenCode V2 宿主探针（S0）：setup 次数 / 工具 schema / agent markdown / Bun 运行时，
                 证据落 .slim/v2-evidence/s0-<ts>.json
+  e2e-v1        V1 回归门禁：真实 OpenCode 1.x CLI 加载本仓库插件，断言 V1 装配成功且无任何 V2 提示/探针，
+                证据落 .slim/v2-evidence/e2e-v1-<ts>.log
 
 环境变量:
   OMO_V2_PLUGIN_DIR       容器内插件目录（默认 /root/.config/opencode/omo-v2-plugin）
   OMO_V2_PORT             宿主端口（默认 14096）
   OMO_V2_PLUGIN_ID         期望的插件 id（默认 oh-my-openagent）
   OMO_V2_SERVER_PASSWORD   serve 的 Basic 密码（默认 omov2-local）
+  OMO_V1_VERSION           e2e-v1 使用的 OpenCode 1.x 版本（默认 1.19.4）
+  OMO_V1_PREFIX            e2e-v1 的 1.x 安装前缀（默认 /opt/opencode1）
+  OMO_V1_PORT              e2e-v1 容器内端口（默认 4199）
   BUN_REGISTRY             bun 安装源（默认官方 npm，可换镜像）
 EOF
 }
@@ -158,6 +172,12 @@ cmd_test() {
   run_v2 bun test --timeout 20000 "$@"
 }
 
+# Escape hatch for one-off container commands that must not run on the host
+# (schema regeneration, `npm ci` in a vendored package, version probes).
+cmd_run() {
+  run_v2 "$@"
+}
+
 cmd_build_plugin() {
   # OMO_SKIP_MATERIALIZE: a source checkout has empty upstream submodules; the
   # materialize step clones them and is irrelevant to the plugin bundle.
@@ -167,8 +187,10 @@ cmd_build_plugin() {
 cmd_build_index() {
   # Same `index` node the root build runs, but bundled self-contained (no
   # `--external zod`) so the staged plugin directory needs no node_modules.
+  # It writes next to the evidence, never over `dist/index.js`.
+  mkdir -p "$ROOT/$E2E_BUNDLE_DIR"
   run_v2 bun build packages/omo-opencode/src/index.ts \
-    --outdir dist --target bun --format esm "$@"
+    --outdir "$E2E_BUNDLE_DIR" --target bun --format esm "$@"
 }
 
 cmd_e2e_load() {
@@ -490,6 +512,171 @@ PY
   echo "OK: S0 探针通过（setup 次数/工具注册/agent 发现/Bun 运行时，详见证据 JSON）"
 }
 
+
+# V1 regression gate. The repository ships one harness but two runtime entries; nothing may make a
+# real OpenCode 1.x host take the V2 path (no "OpenCode 2" notice, no probe file, no probe logs).
+#
+# OpenCode 1.x resolves `plugin` entries as npm packages only: an absolute path is ignored silently
+# and the `~/.config/opencode/plugin/` directory is no longer scanned in 1.19. So the gate stages the
+# local build the way a real install would — warm the host's own package cache once, replace the
+# installed entry with `dist/index.js`, then prove the swap survived (sha256 compare) before
+# asserting, so a reinstall can never make this stage silently test the published package.
+cmd_e2e_v1() {
+  mkdir -p "$EVIDENCE_DIR"
+  local ts evidence verdict
+  ts="$(date +%Y%m%d-%H%M%S)"
+  evidence="$EVIDENCE_DIR/e2e-v1-${ts}.log"
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "==> 镜像缺失，先构建 $IMAGE"
+    compose build
+  fi
+
+  echo "==> 构建 V1 用的插件产物 (dist/index.js, 自包含)"
+  cmd_build_index
+
+  set +e
+  run_v2 bash -s -- "$V1_PREFIX" "$V1_VERSION" "$V1_PORT" "$V1_PLUGIN_PACKAGE" "$REPO_DIST_ENTRY" "$NOTICE_MARKER" 2>&1 <<'DOCKER_V1_EOF' | tee "$evidence"
+set -uo pipefail
+
+PREFIX="$1"; VERSION="$2"; PORT="$3"; PACKAGE="$4"; LOCAL_ENTRY="$5"; NOTICE="$6"
+CLI="$PREFIX/bin/opencode"
+BASE="http://127.0.0.1:$PORT"
+SERVE_LOG="/tmp/omo-v1-serve.log"
+# OpenCode 1.x keeps its own SQLite database; the V2 data home in the shared volume has a different
+# schema, so the gate gives 1.x a private data home instead of migrating a V2 database.
+export XDG_DATA_HOME="$HOME/.local/share/omo-v1-data"
+mkdir -p "$XDG_DATA_HOME"
+PLUGIN_LOG="/tmp/oh-my-opencode.log"
+PROBE_AGENT="$HOME/.config/opencode/agent/omo-v2-probe.md"
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+stop_serve() {
+  pkill -f "opencode serve --hostname 127.0.0.1 --port $PORT" >/dev/null 2>&1 || true
+  sleep 1
+}
+trap stop_serve EXIT
+
+# 1. the real OpenCode 1.x CLI
+if ! "$CLI" --version 2>/dev/null | grep -qx "$VERSION"; then
+  echo "==> 安装 OpenCode 1.x ($VERSION) 到 $PREFIX"
+  npm i -g --prefix "$PREFIX" "opencode-ai@$VERSION" >/tmp/omo-v1-npm.log 2>&1 || {
+    tail -5 /tmp/omo-v1-npm.log
+    fail "npm 安装 opencode-ai@$VERSION 失败"
+  }
+fi
+"$CLI" --version 2>/dev/null | grep -qx "$VERSION" || fail "OpenCode 1.x 版本不符（期望 $VERSION）"
+echo "==> OpenCode 1.x: $("$CLI" --version)"
+
+# 2. global config asks for the plugin by package name (the only form 1.x resolves)
+mkdir -p "$HOME/.config/opencode"
+cat > "$HOME/.config/opencode/opencode.json" <<JSON
+{ "\$schema": "https://opencode.ai/config.json", "plugin": ["$PACKAGE"] }
+JSON
+rm -f "$PLUGIN_LOG" "$PROBE_AGENT"
+
+start_serve() {
+  ( cd /tmp && nohup "$CLI" serve --hostname 127.0.0.1 --port "$PORT" >"$SERVE_LOG" 2>&1 & )
+  local i
+  for i in $(seq 1 60); do
+    curl -fsS --max-time 2 "$BASE/agent" -o /tmp/omo-v1-agents.json 2>/dev/null && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# 3. warm the host's package cache once (this is where 1.x installs `plugin` entries)
+echo "==> 预热 OpenCode 1.x 插件缓存"
+start_serve || { tail -20 "$SERVE_LOG"; fail "OpenCode 1.x serve 无法启动（预热）"; }
+PKG_DIR="$(find "$HOME/.cache/opencode/packages" -maxdepth 4 -type d -name "$PACKAGE" 2>/dev/null | head -1)"
+stop_serve
+[ -n "$PKG_DIR" ] || fail "1.x 未安装插件包 $PACKAGE（找不到安装目录）"
+echo "==> 安装目录: $PKG_DIR"
+
+# 4. replace the installed entry with this checkout's build
+MAIN_REL="$(python3 -c 'import json,os,sys;print(json.load(open(os.path.join(sys.argv[1],"package.json"))).get("main","./dist/index.js").lstrip("./"))' "$PKG_DIR")" \
+  || fail "读不出安装包的 main 入口"
+cp "$LOCAL_ENTRY" "$PKG_DIR/$MAIN_REL"
+LOCAL_SHA="$(sha256sum "$LOCAL_ENTRY" | cut -d' ' -f1)"
+echo "==> 已用本仓库构建替换 $MAIN_REL (sha256 ${LOCAL_SHA:0:12}…)"
+
+# 5. load it for real
+echo "==> 启动 OpenCode 1.x serve (127.0.0.1:$PORT)"
+start_serve || { tail -20 "$SERVE_LOG"; fail "OpenCode 1.x serve 无法启动"; }
+sleep 2
+
+SERVED_SHA="$(sha256sum "$PKG_DIR/$MAIN_REL" | cut -d' ' -f1)"
+[ "$SERVED_SHA" = "$LOCAL_SHA" ] || fail "1.x 重装了插件包，实际加载的不是本仓库构建"
+
+python3 -c '
+import json, sys
+agents = json.load(open(sys.argv[1]))
+names = [str(entry.get("name", "")) for entry in agents]
+builtin = {"build", "plan", "general", "explore", "compaction", "summary", "title"}
+omo = [name for name in names if name and name not in builtin]
+print("==> /agent: %d 个 agent，其中 omo 提供 %d 个" % (len(names), len(omo)))
+for name in omo[:5]:
+    print("    - " + name)
+sys.exit(0 if omo else 1)
+' /tmp/omo-v1-agents.json || fail "V1 的 /agent 里没有本插件装配出的 agent"
+
+[ -f "$PLUGIN_LOG" ] || fail "插件日志 $PLUGIN_LOG 不存在（V1 未加载插件）"
+grep -qF "[oh-my-openagent] ENTRY - plugin loading" "$PLUGIN_LOG" || fail "插件日志缺少 V1 装配完成标记"
+
+count_marker() { grep -cF "$1" "$PLUGIN_LOG" 2>/dev/null || true; }
+V2_NOTICE="$(count_marker "$NOTICE")"
+V2_PROBE="$(count_marker "[omo-v2-probe]")"
+V2_PORTING="$(count_marker "being ported")"
+echo "==> 插件日志中的 V2 痕迹: notice=${V2_NOTICE:-0} probe=${V2_PROBE:-0} porting=${V2_PORTING:-0}（期望全 0）"
+[ "${V2_NOTICE:-0}" = "0" ] || fail "V1 路径出现了 V2 启动提示"
+[ "${V2_PROBE:-0}" = "0" ] || fail "V1 路径执行了 V2 探针"
+[ "${V2_PORTING:-0}" = "0" ] || fail "V1 路径出现了 V2 迁移文案"
+[ ! -f "$PROBE_AGENT" ] || fail "V1 路径写出了 V2 探针 agent 文件 ($PROBE_AGENT)"
+
+TOOL_STATUS="$(curl -sS -o /tmp/omo-v1-tools.json --max-time 5 -w '%{http_code}' "$BASE/tool" 2>/dev/null || echo 000)"
+case "$TOOL_STATUS" in
+  200)
+    # 1.x answers /tool with the web UI's HTML on some builds; only a JSON list is a real工具面.
+    python3 -c '
+import json, sys
+try:
+    payload = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(3)
+entries = payload if isinstance(payload, list) else payload.get("data") or payload.get("tools") or []
+names = sorted({str(entry.get("id") or entry.get("name")) for entry in entries if isinstance(entry, dict)})
+print("==> GET /tool -> 200，%d 个工具" % len(names))
+print("    " + ", ".join(names[:12]))
+sys.exit(0 if "call_omo_agent" in names else 1)
+' /tmp/omo-v1-tools.json
+    TOOL_VERDICT=$?
+    if [ "$TOOL_VERDICT" = "1" ]; then
+      fail "1.x 的 /tool 里没有本插件的工具（期望 call_omo_agent）"
+    fi
+    if [ "$TOOL_VERDICT" = "3" ]; then
+      echo "==> GET /tool -> 200 但返回的不是工具列表（1.x 的 SPA 兜底）：工具注册改由装配日志 + agent 面共同见证"
+    else
+      grep -qF '"omo_v2_probe"' /tmp/omo-v1-tools.json && fail "V1 的工具面出现了 V2 探针工具"
+    fi
+    ;;
+  *)
+    echo "==> GET /tool -> $TOOL_STATUS（1.x 无工具列表端点：工具注册改由装配日志 + agent 面共同见证）"
+    ;;
+esac
+echo "OK: OpenCode 1.x 加载本仓库插件成功：V1 装配标记存在、omo agent 面出现、无任何 V2 提示/探针"
+DOCKER_V1_EOF
+  verdict=$?
+  set -e
+
+  echo "==> 证据: $evidence"
+  if [ "$verdict" -ne 0 ]; then
+    echo "FAIL: e2e-v1 未通过（详见 $evidence）" >&2
+    return 1
+  fi
+  echo "OK: e2e-v1 通过"
+}
+
 main() {
   local sub="${1:-}"
   [ $# -gt 0 ] && shift || true
@@ -498,10 +685,12 @@ main() {
     install) cmd_install "$@" ;;
     typecheck) cmd_typecheck "$@" ;;
     test) cmd_test "$@" ;;
+    run) cmd_run "$@" ;;
     build-plugin) cmd_build_plugin "$@" ;;
     build-index) cmd_build_index "$@" ;;
     e2e-load) cmd_e2e_load "$@" ;;
     e2e-s0) cmd_e2e_s0 "$@" ;;
+    e2e-v1) cmd_e2e_v1 "$@" ;;
     -h|--help|help|"") usage ;;
     *)
       echo "未知命令: $sub" >&2

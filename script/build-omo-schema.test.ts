@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { z } from "zod"
 import { createOmoJsonSchema, OMO_SCHEMA_ID } from "./build-omo-schema-document"
+import { OmoConfigSchema } from "../packages/omo-config-core/src/schema"
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null
@@ -72,11 +73,6 @@ describe("build-omo-schema-document", () => {
           mailbox_poll_interval_ms: 3000,
         },
       },
-      "[senpi]": {
-        task: {
-          default_concurrency: 3,
-        },
-      },
       telemetry: {
         enabled: false,
       },
@@ -90,11 +86,6 @@ describe("build-omo-schema-document", () => {
           "[opencode]": {
             background_task: {
               defaultConcurrency: 2,
-            },
-          },
-          "[senpi]": {
-            task: {
-              default_concurrency: 2,
             },
           },
           telemetry: {
@@ -177,6 +168,38 @@ describe("build-omo-schema-document", () => {
 
     // then
     expect(result.success).toBe(false)
+  })
+
+  test("#given the published schema #when a retired harness block or the native-only computer block is present #then it advertises neither", () => {
+    // given
+    const schema = createOmoJsonSchema()
+    const root = isRecord(schema.properties) ? schema.properties : {}
+    const profiles = isRecord(root.profiles) ? root.profiles : {}
+    const profile = isRecord(profiles.additionalProperties) ? profiles.additionalProperties : {}
+    const profileProperties = isRecord(profile.properties) ? profile.properties : {}
+
+    // then
+    for (const retired of ["[native]", "[senpi]", "[codex]", "computer"]) {
+      expect(root[retired], `${retired} must not be advertised at the root`).toBeUndefined()
+      expect(profileProperties[retired], `${retired} must not be advertised per profile`).toBeUndefined()
+    }
+  })
+
+  test("#given a document that still carries a retired [senpi] block #when validated by the published schema #then it is rejected while the loader still accepts it", () => {
+    // given
+    const schema = createOmoJsonSchema()
+    const retiredDocument = { "[senpi]": { task: { default_concurrency: 3 } } }
+    const validator = z.fromJSONSchema(
+      schema as Parameters<typeof z.fromJSONSchema>[0],
+    )
+
+    // when
+    const publishedResult = validator.safeParse(retiredDocument)
+    const loaderResult = OmoConfigSchema.safeParse(retiredDocument)
+
+    // then
+    expect(publishedResult.success).toBe(false)
+    expect(loaderResult.success).toBe(true)
   })
 
   test("#given the schema generator #when it runs twice #then it produces no diff", () => {

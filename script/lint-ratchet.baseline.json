@@ -101,12 +101,6 @@
   "packages/model-core/src/model-error-classifier.test.ts": {
     "typescript/no-explicit-any": 1
   },
-  "packages/omo-codex/src/telemetry/posthog-diagnostics.test.ts": {
-    "typescript/no-explicit-any": 1
-  },
-  "packages/omo-codex/src/telemetry/posthog.test.ts": {
-    "typescript/no-explicit-any": 1
-  },
   "packages/omo-opencode/src/agents/gpt-prompt-identity.ts": {
     "typescript/no-non-null-assertion": 1
   },
@@ -320,30 +314,6 @@
   "packages/utils/src/process-sweep/sweeper.ts": {
     "typescript/no-non-null-assertion": 1
   },
-  "packages/web/e2e/landing.spec.ts": {
-    "typescript/no-non-null-assertion": 1
-  },
-  "packages/web/e2e/manifesto-glyph-oracle.spec.ts": {
-    "typescript/no-non-null-assertion": 1
-  },
-  "packages/web/e2e/manifesto-glyphs.ts": {
-    "typescript/no-non-null-assertion": 11
-  },
-  "packages/web/e2e/manifesto-reading.spec.ts": {
-    "typescript/no-non-null-assertion": 8
-  },
-  "packages/web/e2e/secret-reading-state.ts": {
-    "typescript/no-non-null-assertion": 5
-  },
-  "packages/web/lib/install-targets.test.ts": {
-    "typescript/no-non-null-assertion": 2
-  },
-  "script/build-omo-binary.test.ts": {
-    "typescript/no-non-null-assertion": 11
-  },
-  "script/build-omo-binary.ts": {
-    "typescript/no-non-null-assertion": 1
-  },
   "script/changelog-backfill-verify.ts": {
     "typescript/no-explicit-any": 1
   },
@@ -358,11 +328,5 @@
   },
   "script/publish.ts": {
     "typescript/no-explicit-any": 1
-  },
-  "script/qa/omp-item2-measure.ts": {
-    "typescript/no-non-null-assertion": 1
-  },
-  "script/release-desktop-engine-target.test.ts": {
-    "typescript/no-non-null-assertion": 1
   }
 }

@@ -163,7 +163,7 @@ describe("published package layout", () => {
     return expect(gitmodules).resolves.not.toContain("packages/lsp-tools-mcp")
   })
 
-  test("#given Codex LSP file dependency #when packing package #then lsp-tools-mcp package metadata ships", async () => {
+  test("#given the LSP tools package dependency #when packing package #then lsp-tools-mcp package metadata ships", async () => {
     // given
     const expectedPackageRootManifest = "packages/lsp-tools-mcp/package.json"
 
@@ -174,18 +174,16 @@ describe("published package layout", () => {
     expect(packedPaths.has(expectedPackageRootManifest)).toBe(true)
   }, packDryRunTimeoutMs)
 
-  test("#given generated Codex installer bundle #when packing package #then generated output ships and stale forks do not", async () => {
+  test("#given the retired Codex edition #when packing the package #then no Codex-only path ships", async () => {
     // given
-    const expectedGeneratedInstaller = "packages/omo-codex/scripts/install-dist/install-local.mjs"
-    const obsoleteForkPrefix = "packages/omo-codex/scripts/install/"
+    const retiredEditionPrefix = "packages/omo-codex/"
 
     // when
     const packedPaths = await packDryRunPaths()
-    const packedObsoleteForks = [...packedPaths].filter((packagePath) => packagePath.startsWith(obsoleteForkPrefix))
+    const packedRetiredPaths = [...packedPaths].filter((packagePath) => packagePath.startsWith(retiredEditionPrefix))
 
     // then
-    expect(packedPaths.has(expectedGeneratedInstaller)).toBe(true)
-    expect(packedObsoleteForks).toEqual([])
+    expect(packedRetiredPaths).toEqual([])
   }, packDryRunTimeoutMs)
 
   test("#given shipped QA skills reference web terminal helpers #when packing package #then helper runtime ships", async () => {
@@ -212,7 +210,7 @@ describe("published package layout", () => {
     expect(missingDocPaths).toEqual([])
   }, packDryRunTimeoutMs)
 
-  test("#given Codex installer source tree #when checking obsolete forks #then hand-written install mjs files are absent", () => {
+  test("#given the retired Codex edition #when checking for obsolete installer forks #then no hand-written install mjs files remain", () => {
     // given
     const obsoleteForkRoot = join(repositoryRoot, "packages/omo-codex/scripts/install")
 

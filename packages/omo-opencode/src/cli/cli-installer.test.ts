@@ -4,7 +4,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import * as configManager from "./config-manager"
 import * as astGrepInstall from "./install-ast-grep-sg"
-import * as codexInstaller from "./install-codex"
 import { runCliInstaller } from "./cli-installer"
 import { ULTIMATE_FALLBACK } from "./model-fallback"
 import { getNoModelProvidersWarning } from "./provider-availability"
@@ -202,58 +201,6 @@ describe("runCliInstaller", () => {
         process.env.OPENCODE_CONFIG_DIR = originalConfigDir
       }
     }
-  })
-
-  it("skips OpenCode checks and writes for platform=codex", async () => {
-    // given
-    const detectSpy = spyOn(configManager, "detectCurrentConfig")
-    const installedSpy = spyOn(configManager, "isOpenCodeInstalled")
-    const versionSpy = spyOn(configManager, "getOpenCodeVersion")
-    const addPluginSpy = spyOn(configManager, "addPluginToOpenCodeConfig")
-    const writeConfigSpy = spyOn(configManager, "writeOmoConfig")
-
-    const codexSpy = spyOn(codexInstaller, "runCodexInstaller").mockResolvedValue({
-      installed: [],
-      configPath: "/tmp/codex-config.toml",
-      codexHome: "/tmp/codex-home",
-      marketplaceName: "sisyphuslabs",
-      gitBashPath: null,
-      projectCleanup: {
-        projectRoot: null,
-        configPath: null,
-        changed: false,
-        removedKeys: [],
-        configs: [],
-        artifacts: [],
-      },
-    })
-
-    const args: InstallArgs = {
-      tui: false,
-      platform: "codex",
-    }
-
-    // when
-    const result = await runCliInstaller(args, "3.4.0")
-
-    // then
-    expect(result).toBe(0)
-    expect(detectSpy).not.toHaveBeenCalled()
-    expect(installedSpy).not.toHaveBeenCalled()
-    expect(versionSpy).not.toHaveBeenCalled()
-    expect(addPluginSpy).not.toHaveBeenCalled()
-    expect(writeConfigSpy).not.toHaveBeenCalled()
-    const output = mockConsoleLog.mock.calls.map((call) => call.join(" ")).join("\n")
-    expect(output).not.toContain("Model Assignment")
-    expect(output).not.toContain("OpenAI/ChatGPT")
-    expect(output).not.toContain("Sisyphus agent performs best")
-
-    detectSpy.mockRestore()
-    installedSpy.mockRestore()
-    versionSpy.mockRestore()
-    addPluginSpy.mockRestore()
-    writeConfigSpy.mockRestore()
-    codexSpy.mockRestore()
   })
 
   it("does not warn about missing providers when only Bailian is configured", async () => {
